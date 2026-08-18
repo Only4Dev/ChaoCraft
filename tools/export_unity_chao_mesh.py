@@ -22,7 +22,7 @@ PROFILES = {
 }
 PARTS = ("Arms", "Belly", "Head", "Legs", "Tail", "Wings")
 MAGIC = b"CHM1"
-VERSION = 2
+VERSION = 3
 
 
 def align16(value: int) -> int:
@@ -35,6 +35,18 @@ def parse_mesh(path: Path, required_morphs: tuple[str, ...]) -> dict:
     vertex_count = int(re.search(r"^\s*m_VertexCount:\s*(\d+)", text, re.MULTILINE).group(1))
     vertex_bytes = bytes.fromhex(re.search(r"^\s*_typelessdata:\s*([0-9a-fA-F]+)", text, re.MULTILINE).group(1))
     index_bytes = bytes.fromhex(re.search(r"^\s*m_IndexBuffer:\s*([0-9a-fA-F]+)", text, re.MULTILINE).group(1))
+
+    submesh_block = text[text.index("  m_SubMeshes:"):text.index("  m_Shapes:")]
+    submeshes = []
+    for match in re.finditer(r"- serializedVersion:\s*2\s+firstByte:\s*(\d+)\s+indexCount:\s*(\d+)\s+topology:\s*(\d+)", submesh_block):
+        first_byte, index_count, topology = map(int, match.groups())
+        if topology != 0:
+            raise ValueError(f"{name}: unsupported non-triangle submesh topology {topology}")
+        if first_byte % 2 != 0:
+            raise ValueError(f"{name}: odd submesh byte offset {first_byte}")
+        submeshes.append((first_byte // 2, index_count))
+    if not submeshes:
+        raise ValueError(f"{name}: no submeshes found")
 
     vertex_data = text[text.index("  m_VertexData:"):text.index("  m_CompressedMesh:")]
     channel_block = vertex_data[vertex_data.index("    m_Channels:"):vertex_data.index("    m_DataSize:")]
@@ -119,6 +131,7 @@ def parse_mesh(path: Path, required_morphs: tuple[str, ...]) -> dict:
         "normals": normals,
         "uv0": uv0,
         "indices": indices,
+        "submeshes": submeshes,
         "morphs": morphs,
     }
 
@@ -144,6 +157,9 @@ def compile_family(input_dir: Path, family: str, output_path: Path, profile: str
             write_string(output, mesh["name"])
             vertex_count = len(mesh["positions"])
             output.write(struct.pack("<II", vertex_count, len(mesh["indices"])))
+            output.write(struct.pack("<I", len(mesh["submeshes"])))
+            for first_index, index_count in mesh["submeshes"]:
+                output.write(struct.pack("<II", first_index, index_count))
             for vertex_index in range(vertex_count):
                 output.write(struct.pack("<3f", *mesh["positions"][vertex_index]))
                 output.write(struct.pack("<3f", *mesh["normals"][vertex_index]))

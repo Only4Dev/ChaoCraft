@@ -14,6 +14,7 @@ public final class ChaoMeshLoader {
 	private static final byte[] MAGIC = {'C', 'H', 'M', '1'};
 	private static final int VERSION_LEGACY_ADULT = 1;
 	private static final int VERSION_NAMED_MORPHS = 2;
+	private static final int VERSION_SUBMESHES = 3;
 
 	private ChaoMeshLoader() {
 	}
@@ -27,7 +28,7 @@ public final class ChaoMeshLoader {
 			}
 
 			int version = data.readInt();
-			if (version != VERSION_LEGACY_ADULT && version != VERSION_NAMED_MORPHS) {
+			if (version != VERSION_LEGACY_ADULT && version != VERSION_NAMED_MORPHS && version != VERSION_SUBMESHES) {
 				throw new IOException("Unsupported Chao mesh version: " + version);
 			}
 
@@ -59,6 +60,26 @@ public final class ChaoMeshLoader {
 				int indexCount = data.readInt();
 				if (vertexCount < 1 || vertexCount > 100_000 || indexCount < 3 || indexCount > 1_000_000) {
 					throw new IOException("Invalid geometry counts for segment " + name);
+				}
+
+				List<ChaoMeshModel.Submesh> submeshes;
+				if (version >= VERSION_SUBMESHES) {
+					int submeshCount = data.readInt();
+					if (submeshCount < 1 || submeshCount > 32) {
+						throw new IOException("Invalid submesh count for segment " + name + ": " + submeshCount);
+					}
+					List<ChaoMeshModel.Submesh> ranges = new ArrayList<>(submeshCount);
+					for (int submesh = 0; submesh < submeshCount; submesh++) {
+						int firstIndex = data.readInt();
+						int submeshIndexCount = data.readInt();
+						if (firstIndex < 0 || submeshIndexCount < 3 || firstIndex + submeshIndexCount > indexCount) {
+							throw new IOException("Invalid submesh range in segment " + name);
+						}
+						ranges.add(new ChaoMeshModel.Submesh(firstIndex, submeshIndexCount));
+					}
+					submeshes = List.copyOf(ranges);
+				} else {
+					submeshes = List.of(new ChaoMeshModel.Submesh(0, indexCount));
 				}
 
 				float[] positions = new float[vertexCount * 3];
@@ -100,7 +121,7 @@ public final class ChaoMeshLoader {
 
 				segments.add(new ChaoMeshModel.Segment(
 						name, vertexCount, positions, normals, uvs,
-						morphPositions, morphNormals, indices
+						morphPositions, morphNormals, indices, submeshes
 				));
 			}
 			return new ChaoMeshModel(morphNames, segments);

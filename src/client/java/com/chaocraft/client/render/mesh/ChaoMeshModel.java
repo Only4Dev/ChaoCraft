@@ -13,6 +13,9 @@ public record ChaoMeshModel(List<String> morphNames, List<Segment> segments) {
 		return morphNames.indexOf(name);
 	}
 
+	public record Submesh(int firstIndex, int indexCount) {
+	}
+
 	public record Segment(
 			String name,
 			int vertexCount,
@@ -21,7 +24,11 @@ public record ChaoMeshModel(List<String> morphNames, List<Segment> segments) {
 			float[] uvs,
 			float[][] morphPositionDeltas,
 			float[][] morphNormalDeltas,
-			int[] indices
+			int[] indices,
+			List<Submesh> submeshes
 	) {
+		public Segment {
+			submeshes = List.copyOf(submeshes);
+		}
 	}
 }
