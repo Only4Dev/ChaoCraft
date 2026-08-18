@@ -2,10 +2,11 @@ package com.chaocraft.visual;
 
 /**
  * Loader-agnostic visual state consumed by the Chao appearance pipeline.
- * Values intentionally mirror the Chao Viewer controls so the future renderer
- * can be driven by the same inputs without coupling simulation code to rendering.
+ * Values intentionally mirror the Chao Viewer controls so rendering can be
+ * driven by the same inputs without coupling simulation code to Minecraft.
  */
 public record ChaoAppearanceState(
+		ChaoVisualType type,
 		float age,
 		float alignment,
 		float swim,
@@ -13,15 +14,25 @@ public record ChaoAppearanceState(
 		float run,
 		float power
 ) {
-	public static final ChaoAppearanceState DEFAULT = new ChaoAppearanceState(0.0F, 0.0F, 0.0F, 0.0F, 0.0F, 0.0F);
+	public static final ChaoAppearanceState DEFAULT = new ChaoAppearanceState(
+			ChaoVisualType.CHILD, 0.0F, 0.0F, 0.0F, 0.0F, 0.0F, 0.0F
+	);
 
 	public ChaoAppearanceState {
+		if (type == null) {
+			type = ChaoVisualType.CHILD;
+		}
 		age = clamp(age, 0.0F, 1.0F);
 		alignment = clamp(alignment, -100.0F, 100.0F);
 		swim = clamp(swim, 0.0F, 100.0F);
 		fly = clamp(fly, 0.0F, 100.0F);
 		run = clamp(run, 0.0F, 100.0F);
 		power = clamp(power, 0.0F, 100.0F);
+	}
+
+	/** Compatibility constructor for code that does not need to choose a family. */
+	public ChaoAppearanceState(float age, float alignment, float swim, float fly, float run, float power) {
+		this(ChaoVisualType.CHILD, age, alignment, swim, fly, run, power);
 	}
 
 	public float normal() {
@@ -81,15 +92,19 @@ public record ChaoAppearanceState(
 			}
 		}
 
-		return new ChaoAppearanceState(age, alignment, newSwim, newFly, newRun, newPower);
+		return new ChaoAppearanceState(type, age, alignment, newSwim, newFly, newRun, newPower);
+	}
+
+	public ChaoAppearanceState withType(ChaoVisualType value) {
+		return new ChaoAppearanceState(value, age, alignment, swim, fly, run, power);
 	}
 
 	public ChaoAppearanceState withAge(float value) {
-		return new ChaoAppearanceState(value, alignment, swim, fly, run, power);
+		return new ChaoAppearanceState(type, value, alignment, swim, fly, run, power);
 	}
 
 	public ChaoAppearanceState withAlignment(float value) {
-		return new ChaoAppearanceState(age, value, swim, fly, run, power);
+		return new ChaoAppearanceState(type, age, value, swim, fly, run, power);
 	}
 
 	private static float clamp(float value, float min, float max) {

@@ -1,9 +1,8 @@
 #!/usr/bin/env python3
 """Compile AssetRipper Unity Mesh YAML into ChaoCraft's compact .cmesh format.
 
-This development-only tool keeps Unity/FBX parsing out of the runtime mod. It
-extracts base geometry, UVs, normals, triangle indices, and the six adult Chao
-blend-shape deltas used by the Viewer's Neutral/Normal family.
+The runtime format stores named morph targets, allowing adult families and the
+18-shape Child family to share the same Minecraft loader/renderer.
 """
 from __future__ import annotations
 
@@ -12,17 +11,25 @@ import re
 import struct
 from pathlib import Path
 
-MORPHS = ("Normal", "Swim", "Fly", "Run", "Power", "SizeDown")
+PROFILES = {
+    "adult": ("Normal", "Swim", "Fly", "Run", "Power", "SizeDown"),
+    "child": (
+        "NNormal", "NSwim", "NFly", "NRun", "NPower",
+        "HNB", "HNormal", "HSwim", "HFly", "HRun", "HPower",
+        "DNB", "DNormal", "DSwim", "DFly", "DRun", "DPower",
+        "SizeDown",
+    ),
+}
 PARTS = ("Arms", "Belly", "Head", "Legs", "Tail", "Wings")
 MAGIC = b"CHM1"
-VERSION = 1
+VERSION = 2
 
 
 def align16(value: int) -> int:
     return (value + 15) // 16 * 16
 
 
-def parse_mesh(path: Path) -> dict:
+def parse_mesh(path: Path, required_morphs: tuple[str, ...]) -> dict:
     text = path.read_text(encoding="utf-8", errors="replace")
     name = re.search(r"^\s*m_Name:\s*(.+)$", text, re.MULTILINE).group(1).strip()
     vertex_count = int(re.search(r"^\s*m_VertexCount:\s*(\d+)", text, re.MULTILINE).group(1))
@@ -102,7 +109,7 @@ def parse_mesh(path: Path) -> dict:
             normal_deltas[vertex_index] = normal_delta
         morphs[channel_name] = (position_deltas, normal_deltas)
 
-    missing = [morph for morph in MORPHS if morph not in morphs]
+    missing = [morph for morph in required_morphs if morph not in morphs]
     if missing:
         raise ValueError(f"{name}: missing required morphs: {', '.join(missing)}")
 
@@ -122,12 +129,17 @@ def write_string(output, value: str) -> None:
     output.write(encoded)
 
 
-def compile_family(input_dir: Path, family: str, output_path: Path) -> None:
-    meshes = [parse_mesh(input_dir / f"{family}_{part}.asset") for part in PARTS]
+def compile_family(input_dir: Path, family: str, output_path: Path, profile: str) -> None:
+    morph_names = PROFILES[profile]
+    meshes = [parse_mesh(input_dir / f"{family}_{part}.asset", morph_names) for part in PARTS]
     output_path.parent.mkdir(parents=True, exist_ok=True)
     with output_path.open("wb") as output:
         output.write(MAGIC)
         output.write(struct.pack("<II", VERSION, len(meshes)))
+        output.write(struct.pack("<I", len(morph_names)))
+        for morph_name in morph_names:
+            write_string(output, morph_name)
+
         for mesh in meshes:
             write_string(output, mesh["name"])
             vertex_count = len(mesh["positions"])
@@ -136,7 +148,7 @@ def compile_family(input_dir: Path, family: str, output_path: Path) -> None:
                 output.write(struct.pack("<3f", *mesh["positions"][vertex_index]))
                 output.write(struct.pack("<3f", *mesh["normals"][vertex_index]))
                 output.write(struct.pack("<2f", *mesh["uv0"][vertex_index]))
-                for morph in MORPHS:
+                for morph in morph_names:
                     position_delta, normal_delta = mesh["morphs"][morph]
                     output.write(struct.pack("<3f", *position_delta[vertex_index]))
                     output.write(struct.pack("<3f", *normal_delta[vertex_index]))
@@ -148,5 +160,6 @@ if __name__ == "__main__":
     parser.add_argument("input_dir", type=Path, help="AssetRipper Assets/Mesh directory")
     parser.add_argument("output", type=Path, help="Output .cmesh file")
     parser.add_argument("--family", default="Neutral_Normal")
+    parser.add_argument("--profile", choices=PROFILES, default="adult")
     arguments = parser.parse_args()
-    compile_family(arguments.input_dir, arguments.family, arguments.output)
+    compile_family(arguments.input_dir, arguments.family, arguments.output, arguments.profile)

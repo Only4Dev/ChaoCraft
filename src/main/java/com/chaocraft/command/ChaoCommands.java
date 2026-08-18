@@ -3,6 +3,7 @@ package com.chaocraft.command;
 import com.chaocraft.entity.ChaoEntity;
 import com.chaocraft.visual.ChaoAppearanceState;
 import com.chaocraft.visual.ChaoAppearanceState.EvolutionChannel;
+import com.chaocraft.visual.ChaoVisualType;
 import com.mojang.brigadier.arguments.FloatArgumentType;
 import net.fabricmc.fabric.api.command.v2.CommandRegistrationCallback;
 import net.minecraft.server.command.ServerCommandSource;
@@ -27,6 +28,9 @@ public final class ChaoCommands {
 		CommandRegistrationCallback.EVENT.register((dispatcher, registryAccess, environment) -> dispatcher.register(
 				literal("chao")
 						.requires(source -> source.hasPermissionLevel(2))
+						.then(literal("type")
+								.then(literal("child").executes(context -> updateType(context.getSource(), ChaoVisualType.CHILD)))
+								.then(literal("normal").executes(context -> updateType(context.getSource(), ChaoVisualType.NORMAL))))
 						.then(literal("age")
 								.then(argument("value", FloatArgumentType.floatArg(0.0F, 1.0F))
 										.executes(context -> updateAge(context.getSource(), FloatArgumentType.getFloat(context, "value")))))
@@ -48,6 +52,15 @@ public final class ChaoCommands {
 				.executes(context -> updateEvolution(
 						context.getSource(), channel, FloatArgumentType.getFloat(context, "value")
 				)));
+	}
+
+	private static int updateType(ServerCommandSource source, ChaoVisualType type) {
+		ChaoEntity chao = nearestChao(source);
+		if (chao == null) {
+			return 0;
+		}
+		chao.setAppearanceState(chao.getAppearanceState().withType(type));
+		return feedback(source, chao);
 	}
 
 	private static int updateAge(ServerCommandSource source, float value) {
@@ -94,8 +107,9 @@ public final class ChaoCommands {
 	private static int feedback(ServerCommandSource source, ChaoEntity chao) {
 		ChaoAppearanceState state = chao.getAppearanceState();
 		source.sendFeedback(() -> Text.literal(String.format(
-				"Chao VIS: age=%.2f alignment=%.1f normal=%.1f swim=%.1f fly=%.1f run=%.1f power=%.1f",
-				state.age(), state.alignment(), state.normal(), state.swim(), state.fly(), state.run(), state.power()
+				"Chao VIS: type=%s age=%.2f alignment=%.1f normal=%.1f swim=%.1f fly=%.1f run=%.1f power=%.1f",
+				state.type().name().toLowerCase(), state.age(), state.alignment(), state.normal(),
+				state.swim(), state.fly(), state.run(), state.power()
 		)), false);
 		return 1;
 	}

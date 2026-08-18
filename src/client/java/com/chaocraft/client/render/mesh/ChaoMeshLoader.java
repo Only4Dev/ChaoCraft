@@ -12,7 +12,8 @@ import java.util.List;
 /** Reads ChaoCraft's compact little-endian morph mesh format. */
 public final class ChaoMeshLoader {
 	private static final byte[] MAGIC = {'C', 'H', 'M', '1'};
-	private static final int VERSION = 1;
+	private static final int VERSION_LEGACY_ADULT = 1;
+	private static final int VERSION_NAMED_MORPHS = 2;
 
 	private ChaoMeshLoader() {
 	}
@@ -26,7 +27,7 @@ public final class ChaoMeshLoader {
 			}
 
 			int version = data.readInt();
-			if (version != VERSION) {
+			if (version != VERSION_LEGACY_ADULT && version != VERSION_NAMED_MORPHS) {
 				throw new IOException("Unsupported Chao mesh version: " + version);
 			}
 
@@ -35,6 +36,22 @@ public final class ChaoMeshLoader {
 				throw new IOException("Invalid Chao mesh segment count: " + segmentCount);
 			}
 
+			List<String> morphNames;
+			if (version == VERSION_LEGACY_ADULT) {
+				morphNames = List.of("Normal", "Swim", "Fly", "Run", "Power", "SizeDown");
+			} else {
+				int morphCount = data.readInt();
+				if (morphCount < 0 || morphCount > 128) {
+					throw new IOException("Invalid Chao morph count: " + morphCount);
+				}
+				List<String> names = new ArrayList<>(morphCount);
+				for (int morph = 0; morph < morphCount; morph++) {
+					names.add(data.readString());
+				}
+				morphNames = List.copyOf(names);
+			}
+
+			int morphCount = morphNames.size();
 			List<ChaoMeshModel.Segment> segments = new ArrayList<>(segmentCount);
 			for (int segmentIndex = 0; segmentIndex < segmentCount; segmentIndex++) {
 				String name = data.readString();
@@ -47,7 +64,6 @@ public final class ChaoMeshLoader {
 				float[] positions = new float[vertexCount * 3];
 				float[] normals = new float[vertexCount * 3];
 				float[] uvs = new float[vertexCount * 2];
-				int morphCount = ChaoMorphTarget.values().length;
 				float[][] morphPositions = new float[morphCount][vertexCount * 3];
 				float[][] morphNormals = new float[morphCount][vertexCount * 3];
 
@@ -87,7 +103,7 @@ public final class ChaoMeshLoader {
 						morphPositions, morphNormals, indices
 				));
 			}
-			return new ChaoMeshModel(List.copyOf(segments));
+			return new ChaoMeshModel(morphNames, segments);
 		}
 	}
 

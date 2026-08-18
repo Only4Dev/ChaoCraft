@@ -3,10 +3,11 @@ package com.chaocraft.client.render;
 import com.chaocraft.ChaoCraft;
 import com.chaocraft.client.render.mesh.ChaoMeshLoader;
 import com.chaocraft.client.render.mesh.ChaoMeshModel;
-import com.chaocraft.client.render.mesh.ChaoMorphTarget;
 import com.chaocraft.entity.ChaoEntity;
+import com.chaocraft.visual.ChaoAppearanceState;
 import com.chaocraft.visual.ChaoMorphResolver;
 import com.chaocraft.visual.ChaoMorphWeights;
+import com.chaocraft.visual.ChaoVisualType;
 import net.minecraft.block.Blocks;
 import net.minecraft.client.MinecraftClient;
 import net.minecraft.client.render.OverlayTexture;
@@ -28,17 +29,19 @@ import java.io.InputStream;
 import java.util.Optional;
 
 /**
- * First real Chao renderer. It consumes the morph data compiled from the
- * Chao Viewer meshes and applies Viewer-compatible blend weights at runtime.
+ * Morphable Chao renderer. CP03 adds the full Child mesh family and maps the
+ * Viewer's 18 Child blend shapes from age, alignment, and evolution sliders.
  */
 public final class ChaoRenderer extends EntityRenderer<ChaoEntity> {
+	private static final Identifier CHILD_MODEL = ChaoCraft.id("models/chao/child.cmesh");
 	private static final Identifier NEUTRAL_NORMAL_MODEL = ChaoCraft.id("models/chao/neutral_normal.cmesh");
 	private static final Identifier WHITE_TEXTURE = ChaoCraft.id("textures/entity/chao/white.png");
 	private static final float MODEL_SCALE = 0.18F;
 
+	private ChaoMeshModel childModel;
 	private ChaoMeshModel neutralNormalModel;
-	private boolean modelLoadAttempted;
-	private boolean modelLoadFailed;
+	private boolean childLoadAttempted;
+	private boolean neutralNormalLoadAttempted;
 
 	public ChaoRenderer(EntityRendererFactory.Context context) {
 		super(context);
@@ -48,33 +51,25 @@ public final class ChaoRenderer extends EntityRenderer<ChaoEntity> {
 	@Override
 	public void render(ChaoEntity entity, float yaw, float tickDelta, MatrixStack matrices,
 			VertexConsumerProvider vertexConsumers, int light) {
-		ChaoMeshModel model = getNeutralNormalModel();
+		ChaoAppearanceState state = entity.getAppearanceState();
+		ChaoMeshModel model = getModel(state.type());
 		if (model == null) {
 			renderFallback(matrices, vertexConsumers, light);
 			super.render(entity, yaw, tickDelta, matrices, vertexConsumers, light);
 			return;
 		}
 
-		ChaoMorphWeights weights = ChaoMorphResolver.resolve(entity.getAppearanceState());
-		float[] morphWeights = {
-				weights.normal() / 100.0F,
-				weights.swim() / 100.0F,
-				weights.fly() / 100.0F,
-				weights.run() / 100.0F,
-				weights.power() / 100.0F,
-				0.0F
-		};
+		ChaoMorphWeights weights = ChaoMorphResolver.resolve(state);
+		float[] morphWeights = buildMorphWeights(model, state.type(), weights);
 
 		matrices.push();
 		matrices.multiply(RotationAxis.POSITIVE_Y.rotationDegrees(180.0F - yaw));
-
-		/*
-		 * Keep MatrixStack free of reflections. Unity -> Minecraft handedness is
-		 * converted explicitly per vertex below (Z is mirrored and triangle winding
-		 * is reversed). A negative scale inside MatrixStack makes Minecraft's normal
-		 * matrix take the reflected transform path and produced view-dependent
-		 * lighting on the imported smooth normals.
-		 */
+		// The extracted Child family is authored Z-up while the adult family is Y-up.
+		// Bake the same -90° X correction used when inspecting the FBX in Blender.
+		// After the Unity -> Minecraft Z mirror, this is +90° in render space.
+		if (state.type() == ChaoVisualType.CHILD) {
+			matrices.multiply(RotationAxis.POSITIVE_X.rotationDegrees(90.0F));
+		}
 		matrices.scale(MODEL_SCALE, MODEL_SCALE, MODEL_SCALE);
 
 		VertexConsumer vertices = vertexConsumers.getBuffer(RenderLayer.getEntityCutoutNoCull(WHITE_TEXTURE));
@@ -84,6 +79,44 @@ public final class ChaoRenderer extends EntityRenderer<ChaoEntity> {
 		matrices.pop();
 
 		super.render(entity, yaw, tickDelta, matrices, vertexConsumers, light);
+	}
+
+	private static float[] buildMorphWeights(ChaoMeshModel model, ChaoVisualType type, ChaoMorphWeights weights) {
+		float[] resolved = new float[model.morphNames().size()];
+		if (type == ChaoVisualType.CHILD) {
+			setMorph(model, resolved, "NNormal", weights.neutralNormal());
+			setMorph(model, resolved, "NSwim", weights.neutralSwim());
+			setMorph(model, resolved, "NFly", weights.neutralFly());
+			setMorph(model, resolved, "NRun", weights.neutralRun());
+			setMorph(model, resolved, "NPower", weights.neutralPower());
+			setMorph(model, resolved, "HNB", weights.heroNeutralBaby());
+			setMorph(model, resolved, "HNormal", weights.heroNormal());
+			setMorph(model, resolved, "HSwim", weights.heroSwim());
+			setMorph(model, resolved, "HFly", weights.heroFly());
+			setMorph(model, resolved, "HRun", weights.heroRun());
+			setMorph(model, resolved, "HPower", weights.heroPower());
+			setMorph(model, resolved, "DNB", weights.darkNeutralBaby());
+			setMorph(model, resolved, "DNormal", weights.darkNormal());
+			setMorph(model, resolved, "DSwim", weights.darkSwim());
+			setMorph(model, resolved, "DFly", weights.darkFly());
+			setMorph(model, resolved, "DRun", weights.darkRun());
+			setMorph(model, resolved, "DPower", weights.darkPower());
+		} else {
+			setMorph(model, resolved, "Normal", weights.normal());
+			setMorph(model, resolved, "Swim", weights.swim());
+			setMorph(model, resolved, "Fly", weights.fly());
+			setMorph(model, resolved, "Run", weights.run());
+			setMorph(model, resolved, "Power", weights.power());
+		}
+		// SizeDown remains zero until Animal Parts are integrated.
+		return resolved;
+	}
+
+	private static void setMorph(ChaoMeshModel model, float[] resolved, String name, float percent) {
+		int index = model.morphIndex(name);
+		if (index >= 0) {
+			resolved[index] = percent / 100.0F;
+		}
 	}
 
 	private static void renderSegment(ChaoMeshModel.Segment segment, float[] weights,
@@ -100,20 +133,8 @@ public final class ChaoRenderer extends EntityRenderer<ChaoEntity> {
 			return;
 		}
 
-		/*
-		 * Unity stores these meshes as triangle lists, while Minecraft's standard
-		 * entity RenderLayer uses QUADS. Feeding three vertices at a time caused
-		 * unrelated triangles to be grouped into quads, producing the long spikes
-		 * and holes seen in CP02. Emit each source triangle as A/B/C/C: Minecraft
-		 * triangulates that quad into the original triangle plus one degenerate
-		 * triangle, preserving the source topology without changing render state.
-		 */
 		for (int triangle = 0; triangle < indices.length; triangle += 3) {
-			/*
-			 * Mirroring Z changes handedness, so reverse B/C to preserve the original
-			 * front-face orientation. A/C/B/B still represents one triangle through
-			 * Minecraft's quad entity layer (the second generated triangle degenerates).
-			 */
+			// Unity -> Minecraft mirrors Z, so reverse B/C to preserve front faces.
 			emitVertex(segment, indices[triangle], weights, positionMatrix, normalMatrix, vertices, light, color);
 			emitVertex(segment, indices[triangle + 2], weights, positionMatrix, normalMatrix, vertices, light, color);
 			emitVertex(segment, indices[triangle + 1], weights, positionMatrix, normalMatrix, vertices, light, color);
@@ -133,7 +154,8 @@ public final class ChaoRenderer extends EntityRenderer<ChaoEntity> {
 		float ny = segment.normals()[p + 1];
 		float nz = segment.normals()[p + 2];
 
-		for (int morph = 0; morph < weights.length; morph++) {
+		int morphCount = Math.min(weights.length, segment.morphPositionDeltas().length);
+		for (int morph = 0; morph < morphCount; morph++) {
 			float weight = weights[morph];
 			if (weight == 0.0F) {
 				continue;
@@ -148,19 +170,9 @@ public final class ChaoRenderer extends EntityRenderer<ChaoEntity> {
 			nz += normalDelta[p + 2] * weight;
 		}
 
-		/*
-		 * Convert Unity handedness explicitly. Positions and normal vectors both
-		 * mirror Z; triangle winding is reversed by renderSegment(). Morph deltas are
-		 * already accumulated above, so the conversion applies to the final shape.
-		 */
 		z = -z;
 		nz = -nz;
 
-		/*
-		 * Resolve the final normal before it reaches VertexConsumer. Keeping this
-		 * explicit avoids relying on the reflected MatrixStack path and guarantees a
-		 * unit world/view-space normal after entity rotation and model scaling.
-		 */
 		Vector3f transformedNormal = new Vector3f(nx, ny, nz);
 		normalMatrix.transform(transformedNormal);
 		if (transformedNormal.lengthSquared() > 0.000001F) {
@@ -188,35 +200,44 @@ public final class ChaoRenderer extends EntityRenderer<ChaoEntity> {
 		return new int[]{255, 220, 122};
 	}
 
-	private ChaoMeshModel getNeutralNormalModel() {
-		if (modelLoadAttempted) {
-			return neutralNormalModel;
-		}
-		modelLoadAttempted = true;
+	private ChaoMeshModel getModel(ChaoVisualType type) {
+		return switch (type) {
+			case CHILD -> getChildModel();
+			case NORMAL -> getNeutralNormalModel();
+		};
+	}
 
-		Optional<Resource> resource = MinecraftClient.getInstance().getResourceManager().getResource(NEUTRAL_NORMAL_MODEL);
+	private ChaoMeshModel getChildModel() {
+		if (!childLoadAttempted) {
+			childLoadAttempted = true;
+			childModel = loadModel(CHILD_MODEL);
+		}
+		return childModel;
+	}
+
+	private ChaoMeshModel getNeutralNormalModel() {
+		if (!neutralNormalLoadAttempted) {
+			neutralNormalLoadAttempted = true;
+			neutralNormalModel = loadModel(NEUTRAL_NORMAL_MODEL);
+		}
+		return neutralNormalModel;
+	}
+
+	private ChaoMeshModel loadModel(Identifier identifier) {
+		Optional<Resource> resource = MinecraftClient.getInstance().getResourceManager().getResource(identifier);
 		if (resource.isEmpty()) {
-			failModelLoad("Missing Chao mesh resource: " + NEUTRAL_NORMAL_MODEL, null);
+			ChaoCraft.LOGGER.error("Missing Chao mesh resource: {}", identifier);
 			return null;
 		}
 
 		try (InputStream input = resource.get().getInputStream()) {
-			neutralNormalModel = ChaoMeshLoader.load(input);
-			ChaoCraft.LOGGER.info("Loaded Chao morph mesh {} ({} segments)", NEUTRAL_NORMAL_MODEL,
-					neutralNormalModel.segments().size());
-			return neutralNormalModel;
+			ChaoMeshModel model = ChaoMeshLoader.load(input);
+			ChaoCraft.LOGGER.info("Loaded Chao morph mesh {} ({} segments, {} morphs)", identifier,
+					model.segments().size(), model.morphNames().size());
+			return model;
 		} catch (IOException exception) {
-			failModelLoad("Failed to load Chao mesh: " + NEUTRAL_NORMAL_MODEL, exception);
+			ChaoCraft.LOGGER.error("Failed to load Chao mesh: {}", identifier, exception);
 			return null;
-		}
-	}
-
-	private void failModelLoad(String message, Exception exception) {
-		modelLoadFailed = true;
-		if (exception == null) {
-			ChaoCraft.LOGGER.error(message);
-		} else {
-			ChaoCraft.LOGGER.error(message, exception);
 		}
 	}
 

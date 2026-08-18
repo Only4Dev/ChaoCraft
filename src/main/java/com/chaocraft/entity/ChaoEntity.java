@@ -1,6 +1,7 @@
 package com.chaocraft.entity;
 
 import com.chaocraft.visual.ChaoAppearanceState;
+import com.chaocraft.visual.ChaoVisualType;
 import net.minecraft.entity.EntityType;
 import net.minecraft.entity.attribute.DefaultAttributeContainer;
 import net.minecraft.entity.attribute.EntityAttributes;
@@ -13,12 +14,9 @@ import net.minecraft.nbt.NbtCompound;
 import net.minecraft.text.Text;
 import net.minecraft.world.World;
 
-/**
- * Real Chao entity foundation. The current renderer is only a placeholder;
- * gameplay and appearance state already live on the Chao itself so replacing
- * the renderer later does not require replacing the entity.
- */
+/** Persistent server-authoritative Chao entity foundation. */
 public class ChaoEntity extends PathAwareEntity {
+	private static final String NBT_VISUAL_TYPE = "VisualType";
 	private static final String NBT_VISUAL_AGE = "VisualAge";
 	private static final String NBT_ALIGNMENT = "Alignment";
 	private static final String NBT_SWIM = "VisualSwim";
@@ -26,6 +24,7 @@ public class ChaoEntity extends PathAwareEntity {
 	private static final String NBT_RUN = "VisualRun";
 	private static final String NBT_POWER = "VisualPower";
 
+	private static final TrackedData<Integer> VISUAL_TYPE = DataTracker.registerData(ChaoEntity.class, TrackedDataHandlerRegistry.INTEGER);
 	private static final TrackedData<Float> VISUAL_AGE = DataTracker.registerData(ChaoEntity.class, TrackedDataHandlerRegistry.FLOAT);
 	private static final TrackedData<Float> ALIGNMENT = DataTracker.registerData(ChaoEntity.class, TrackedDataHandlerRegistry.FLOAT);
 	private static final TrackedData<Float> VISUAL_SWIM = DataTracker.registerData(ChaoEntity.class, TrackedDataHandlerRegistry.FLOAT);
@@ -37,7 +36,6 @@ public class ChaoEntity extends PathAwareEntity {
 		super(entityType, world);
 		this.experiencePoints = 0;
 
-		// Temporary visible identifier while the custom Chao renderer is built.
 		if (!world.isClient) {
 			this.setCustomName(Text.literal("Chao [VIS prototype]"));
 			this.setCustomNameVisible(true);
@@ -53,13 +51,13 @@ public class ChaoEntity extends PathAwareEntity {
 
 	@Override
 	protected void initGoals() {
-		// Intentionally empty. SA2-compatible Chao behavior will be implemented
-		// by ChaoCraft's own behavior scheduler instead of vanilla mob goals.
+		// SA2-compatible behavior will use ChaoCraft's own scheduler later.
 	}
 
 	@Override
 	protected void initDataTracker() {
 		super.initDataTracker();
+		this.dataTracker.startTracking(VISUAL_TYPE, ChaoAppearanceState.DEFAULT.type().ordinal());
 		this.dataTracker.startTracking(VISUAL_AGE, ChaoAppearanceState.DEFAULT.age());
 		this.dataTracker.startTracking(ALIGNMENT, ChaoAppearanceState.DEFAULT.alignment());
 		this.dataTracker.startTracking(VISUAL_SWIM, ChaoAppearanceState.DEFAULT.swim());
@@ -70,6 +68,7 @@ public class ChaoEntity extends PathAwareEntity {
 
 	public ChaoAppearanceState getAppearanceState() {
 		return new ChaoAppearanceState(
+				ChaoVisualType.fromOrdinal(this.dataTracker.get(VISUAL_TYPE)),
 				this.dataTracker.get(VISUAL_AGE),
 				this.dataTracker.get(ALIGNMENT),
 				this.dataTracker.get(VISUAL_SWIM),
@@ -80,6 +79,7 @@ public class ChaoEntity extends PathAwareEntity {
 	}
 
 	public void setAppearanceState(ChaoAppearanceState state) {
+		this.dataTracker.set(VISUAL_TYPE, state.type().ordinal());
 		this.dataTracker.set(VISUAL_AGE, state.age());
 		this.dataTracker.set(ALIGNMENT, state.alignment());
 		this.dataTracker.set(VISUAL_SWIM, state.swim());
@@ -92,6 +92,7 @@ public class ChaoEntity extends PathAwareEntity {
 	public void writeCustomDataToNbt(NbtCompound nbt) {
 		super.writeCustomDataToNbt(nbt);
 		ChaoAppearanceState state = getAppearanceState();
+		nbt.putInt(NBT_VISUAL_TYPE, state.type().ordinal());
 		nbt.putFloat(NBT_VISUAL_AGE, state.age());
 		nbt.putFloat(NBT_ALIGNMENT, state.alignment());
 		nbt.putFloat(NBT_SWIM, state.swim());
@@ -104,6 +105,9 @@ public class ChaoEntity extends PathAwareEntity {
 	public void readCustomDataFromNbt(NbtCompound nbt) {
 		super.readCustomDataFromNbt(nbt);
 		setAppearanceState(new ChaoAppearanceState(
+				nbt.contains(NBT_VISUAL_TYPE)
+						? ChaoVisualType.fromOrdinal(nbt.getInt(NBT_VISUAL_TYPE))
+						: ChaoAppearanceState.DEFAULT.type(),
 				nbt.contains(NBT_VISUAL_AGE) ? nbt.getFloat(NBT_VISUAL_AGE) : ChaoAppearanceState.DEFAULT.age(),
 				nbt.contains(NBT_ALIGNMENT) ? nbt.getFloat(NBT_ALIGNMENT) : ChaoAppearanceState.DEFAULT.alignment(),
 				nbt.contains(NBT_SWIM) ? nbt.getFloat(NBT_SWIM) : ChaoAppearanceState.DEFAULT.swim(),
