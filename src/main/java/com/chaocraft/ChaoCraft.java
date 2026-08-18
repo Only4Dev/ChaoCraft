@@ -1,5 +1,6 @@
 package com.chaocraft;
 
+import com.chaocraft.command.ChaoCommands;
 import com.chaocraft.entity.ModEntities;
 import net.fabricmc.api.ModInitializer;
 import net.minecraft.util.Identifier;
@@ -13,6 +14,7 @@ public class ChaoCraft implements ModInitializer {
 	@Override
 	public void onInitialize() {
 		ModEntities.register();
+		ChaoCommands.register();
 		LOGGER.info("ChaoCraft initialized.");
 	}
 
