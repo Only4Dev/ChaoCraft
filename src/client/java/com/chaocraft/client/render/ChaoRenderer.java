@@ -48,6 +48,8 @@ import java.util.Optional;
 public final class ChaoRenderer extends EntityRenderer<ChaoEntity> {
     private static final Identifier CHILD_MODEL = ChaoCraft.id("models/chao/child.cmesh");
     private static final Identifier NEUTRAL_NORMAL_MODEL = ChaoCraft.id("models/chao/neutral_normal.cmesh");
+    private static final Identifier HERO_NORMAL_MODEL = ChaoCraft.id("models/chao/hero_normal.cmesh");
+    private static final Identifier DARK_NORMAL_MODEL = ChaoCraft.id("models/chao/dark_normal.cmesh");
     private static final Identifier WHITE_TEXTURE = ChaoCraft.id("textures/entity/chao/white.png");
     private static final Identifier BODY_MASK = ChaoCraft.id("textures/entity/chao/material/c_body.png");
     private static final Identifier CHILD_BODY_EXTRA_MASK = ChaoCraft.id("textures/entity/chao/material/hn_body2.png");
@@ -56,6 +58,15 @@ public final class ChaoRenderer extends EntityRenderer<ChaoEntity> {
     private static final Identifier HORNS_MASK = ChaoCraft.id("textures/entity/chao/material/c_horns.png");
     private static final Identifier WINGS_MASK = ChaoCraft.id("textures/entity/chao/material/c_wings.png");
     private static final Identifier EYE_NORMAL = ChaoCraft.id("textures/entity/chao/face/eye01.png");
+    private static final Identifier HERO_BODY_MASK = ChaoCraft.id("textures/entity/chao/material/hn_body.png");
+    private static final Identifier HERO_BODY_EXTRA_MASK = ChaoCraft.id("textures/entity/chao/material/hn_body2.png");
+    private static final Identifier HERO_BELLY_MASK = ChaoCraft.id("textures/entity/chao/material/hn_belly1.png");
+    private static final Identifier HERO_WINGS_MASK = ChaoCraft.id("textures/entity/chao/material/hn_wings.png");
+    private static final Identifier DARK_BODY_MASK = ChaoCraft.id("textures/entity/chao/material/dn_body1.png");
+    private static final Identifier DARK_BODY_EXTRA_MASK = ChaoCraft.id("textures/entity/chao/material/dn_body2.png");
+    private static final Identifier DARK_BELLY_MASK = ChaoCraft.id("textures/entity/chao/material/dn_belly.png");
+    private static final Identifier DARK_WINGS_MASK = ChaoCraft.id("textures/entity/chao/material/dn_wings1.png");
+    private static final Identifier DARK_WINGS_EXTRA_MASK = ChaoCraft.id("textures/entity/chao/material/dn_wings2.png");
     private static final float MODEL_SCALE = 0.18F;
 
     private final ChaoRenderCache morphCache = new ChaoRenderCache();
@@ -63,8 +74,12 @@ public final class ChaoRenderer extends EntityRenderer<ChaoEntity> {
 
     private ChaoMeshModel childModel;
     private ChaoMeshModel neutralNormalModel;
+    private ChaoMeshModel heroNormalModel;
+    private ChaoMeshModel darkNormalModel;
     private boolean childLoadAttempted;
     private boolean neutralNormalLoadAttempted;
+    private boolean heroNormalLoadAttempted;
+    private boolean darkNormalLoadAttempted;
 
     public ChaoRenderer(EntityRendererFactory.Context context) {
         super(context);
@@ -75,7 +90,7 @@ public final class ChaoRenderer extends EntityRenderer<ChaoEntity> {
     public void render(ChaoEntity entity, float yaw, float tickDelta, MatrixStack matrices,
             VertexConsumerProvider vertexConsumers, int light) {
         ChaoAppearanceState state = entity.getAppearanceState();
-        ChaoMeshModel model = getModel(state.type());
+        ChaoMeshModel model = getModel(state);
         if (model == null) {
             renderFallback(matrices, vertexConsumers, light);
             super.render(entity, yaw, tickDelta, matrices, vertexConsumers, light);
@@ -98,7 +113,7 @@ public final class ChaoRenderer extends EntityRenderer<ChaoEntity> {
                 light,
                 bakedYaw,
                 worldTick,
-                () -> buildGpuBatches(model, prepared, state.type(), prepared.palette(), light, bakedYaw)
+                () -> buildGpuBatches(model, prepared, state, prepared.palette(), light, bakedYaw)
         );
 
         drawGpuBatches(gpuEntry, matrices);
@@ -143,8 +158,10 @@ public final class ChaoRenderer extends EntityRenderer<ChaoEntity> {
     }
 
     private static List<ChaoGpuRenderCache.DrawBatch> buildGpuBatches(ChaoMeshModel model,
-            ChaoRenderCache.Entry prepared, ChaoVisualType type, ChaoPaletteState palette,
+            ChaoRenderCache.Entry prepared, ChaoAppearanceState state, ChaoPaletteState palette,
             int light, float bakedYaw) {
+        ChaoVisualType type = state.type();
+        AdultNormalVariant adultVariant = resolveAdultNormalVariant(state);
         RenderSystem.assertOnRenderThread();
 
         Map<BatchKey, List<DrawSource>> grouped = new LinkedHashMap<>();
@@ -156,6 +173,7 @@ public final class ChaoRenderer extends EntityRenderer<ChaoEntity> {
                         grouped,
                         role,
                         type,
+                        adultVariant,
                         segment,
                         preparedSegment,
                         segment.submeshes().get(submeshIndex),
@@ -211,23 +229,49 @@ public final class ChaoRenderer extends EntityRenderer<ChaoEntity> {
     }
 
     private static void collectMaterialPasses(Map<BatchKey, List<DrawSource>> grouped, MaterialRole role,
-            ChaoVisualType type, ChaoMeshModel.Segment segment, ChaoRenderCache.PreparedSegment prepared,
-            ChaoMeshModel.Submesh submesh, ChaoPaletteState palette) {
+            ChaoVisualType type, AdultNormalVariant adultVariant, ChaoMeshModel.Segment segment,
+            ChaoRenderCache.PreparedSegment prepared, ChaoMeshModel.Submesh submesh, ChaoPaletteState palette) {
         switch (role) {
             case BODY -> {
                 addPass(grouped, WHITE_TEXTURE, palette.base().multiply(palette.bodyCover()), false,
                         segment, prepared, submesh);
-                addPass(grouped, BODY_MASK, palette.body(), true, segment, prepared, submesh);
-                if (type == ChaoVisualType.CHILD && palette.extra2().alpha8() > 0) {
-                    addPass(grouped, CHILD_BODY_EXTRA_MASK, palette.extra2(), true, segment, prepared, submesh);
+                if (type == ChaoVisualType.CHILD) {
+                    addPass(grouped, BODY_MASK, palette.body(), true, segment, prepared, submesh);
+                    if (palette.extra2().alpha8() > 0) {
+                        addPass(grouped, CHILD_BODY_EXTRA_MASK, palette.extra2(), true, segment, prepared, submesh);
+                    }
+                } else if (adultVariant == AdultNormalVariant.HERO) {
+                    addPass(grouped, HERO_BODY_MASK, palette.body(), true, segment, prepared, submesh);
+                    if (palette.extra().alpha8() > 0) {
+                        addPass(grouped, HERO_BODY_EXTRA_MASK, palette.extra(), true, segment, prepared, submesh);
+                    }
+                } else if (adultVariant == AdultNormalVariant.DARK) {
+                    // ChaoMaterial applies _ColorC (BodyCover) to the fully composed
+                    // body material. Multiplying each emulated layer by the same
+                    // cover preserves that operation through standard alpha blending.
+                    addPass(grouped, DARK_BODY_MASK, palette.body().multiply(palette.bodyCover()), true,
+                            segment, prepared, submesh);
+                    addPass(grouped, DARK_BODY_EXTRA_MASK, palette.extra().multiply(palette.bodyCover()), true,
+                            segment, prepared, submesh);
+                } else {
+                    addPass(grouped, BODY_MASK, palette.body(), true, segment, prepared, submesh);
                 }
             }
             case BELLY -> {
                 addPass(grouped, WHITE_TEXTURE, palette.base().multiply(palette.bodyCover()), false,
                         segment, prepared, submesh);
-                addPass(grouped, BELLY_MASK, palette.belly(), true, segment, prepared, submesh);
-                if (type == ChaoVisualType.CHILD && palette.extra().alpha8() > 0) {
-                    addPass(grouped, CHILD_BELLY_EXTRA_MASK, palette.extra(), true, segment, prepared, submesh);
+                if (type == ChaoVisualType.CHILD) {
+                    addPass(grouped, BELLY_MASK, palette.belly(), true, segment, prepared, submesh);
+                    if (palette.extra().alpha8() > 0) {
+                        addPass(grouped, CHILD_BELLY_EXTRA_MASK, palette.extra(), true, segment, prepared, submesh);
+                    }
+                } else if (adultVariant == AdultNormalVariant.HERO) {
+                    addPass(grouped, HERO_BELLY_MASK, palette.belly(), true, segment, prepared, submesh);
+                } else if (adultVariant == AdultNormalVariant.DARK) {
+                    addPass(grouped, DARK_BELLY_MASK, palette.belly().multiply(palette.bodyCover()), true,
+                            segment, prepared, submesh);
+                } else {
+                    addPass(grouped, BELLY_MASK, palette.belly(), true, segment, prepared, submesh);
                 }
             }
             case HORNS -> {
@@ -238,11 +282,23 @@ public final class ChaoRenderer extends EntityRenderer<ChaoEntity> {
             case WINGS -> {
                 addPass(grouped, WHITE_TEXTURE, palette.wingsBase().multiply(palette.wingsCover()), false,
                         segment, prepared, submesh);
-                addPass(grouped, WINGS_MASK, palette.wings(), true, segment, prepared, submesh);
+                if (type == ChaoVisualType.CHILD) {
+                    addPass(grouped, WINGS_MASK, palette.wings(), true, segment, prepared, submesh);
+                } else if (adultVariant == AdultNormalVariant.HERO) {
+                    addPass(grouped, HERO_WINGS_MASK, palette.wings(), true, segment, prepared, submesh);
+                } else if (adultVariant == AdultNormalVariant.DARK) {
+                    addPass(grouped, DARK_WINGS_MASK, palette.wings().multiply(palette.wingsCover()), true,
+                            segment, prepared, submesh);
+                    addPass(grouped, DARK_WINGS_EXTRA_MASK,
+                            ChaoColor.rgb(222, 64, 222).multiply(palette.wingsCover()), true,
+                            segment, prepared, submesh);
+                } else {
+                    addPass(grouped, WINGS_MASK, palette.wings(), true, segment, prepared, submesh);
+                }
             }
             case EYES -> addPass(grouped, EYE_NORMAL, ChaoColor.WHITE, false, segment, prepared, submesh);
             case HIDDEN -> {
-                // Default eyelids and mouth are transparent in the Viewer.
+                // Face/eyelid/mouth parity is handled by a later visual checkpoint.
             }
         }
     }
@@ -403,11 +459,27 @@ public final class ChaoRenderer extends EntityRenderer<ChaoEntity> {
         return MaterialRole.BODY;
     }
 
-    private ChaoMeshModel getModel(ChaoVisualType type) {
-        return switch (type) {
-            case CHILD -> getChildModel();
-            case NORMAL -> getNeutralNormalModel();
+    private ChaoMeshModel getModel(ChaoAppearanceState state) {
+        if (state.type() == ChaoVisualType.CHILD) {
+            return getChildModel();
+        }
+        return switch (resolveAdultNormalVariant(state)) {
+            case NEUTRAL -> getNeutralNormalModel();
+            case HERO -> getHeroNormalModel();
+            case DARK -> getDarkNormalModel();
         };
+    }
+
+    private static AdultNormalVariant resolveAdultNormalVariant(ChaoAppearanceState state) {
+        if (state.type() == ChaoVisualType.NORMAL) {
+            if (state.alignment() >= 50.0F) {
+                return AdultNormalVariant.HERO;
+            }
+            if (state.alignment() <= -50.0F) {
+                return AdultNormalVariant.DARK;
+            }
+        }
+        return AdultNormalVariant.NEUTRAL;
     }
 
     private ChaoMeshModel getChildModel() {
@@ -424,6 +496,22 @@ public final class ChaoRenderer extends EntityRenderer<ChaoEntity> {
             neutralNormalModel = loadModel(NEUTRAL_NORMAL_MODEL);
         }
         return neutralNormalModel;
+    }
+
+    private ChaoMeshModel getHeroNormalModel() {
+        if (!heroNormalLoadAttempted) {
+            heroNormalLoadAttempted = true;
+            heroNormalModel = loadModel(HERO_NORMAL_MODEL);
+        }
+        return heroNormalModel;
+    }
+
+    private ChaoMeshModel getDarkNormalModel() {
+        if (!darkNormalLoadAttempted) {
+            darkNormalLoadAttempted = true;
+            darkNormalModel = loadModel(DARK_NORMAL_MODEL);
+        }
+        return darkNormalModel;
     }
 
     private ChaoMeshModel loadModel(Identifier identifier) {
@@ -457,6 +545,12 @@ public final class ChaoRenderer extends EntityRenderer<ChaoEntity> {
     @Override
     public Identifier getTexture(ChaoEntity entity) {
         return WHITE_TEXTURE;
+    }
+
+    private enum AdultNormalVariant {
+        NEUTRAL,
+        HERO,
+        DARK
     }
 
     private enum MaterialRole {
