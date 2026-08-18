@@ -4,6 +4,7 @@ package com.chaocraft.client.render.material;
 public record ChaoColor(float r, float g, float b, float a) {
 	public static final ChaoColor WHITE = rgb(255, 255, 255);
 	public static final ChaoColor TRANSPARENT_WHITE = rgba(255, 255, 255, 0);
+	public static final ChaoColor TRANSPARENT = rgba(0, 0, 0, 0);
 
 	public static ChaoColor rgb(int r, int g, int b) {
 		return rgba(r, g, b, 255);

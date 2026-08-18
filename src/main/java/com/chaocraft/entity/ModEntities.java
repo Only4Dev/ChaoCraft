@@ -1,6 +1,7 @@
 package com.chaocraft.entity;
 
 import com.chaocraft.ChaoCraft;
+import com.chaocraft.config.ChaoServerConfig;
 import net.fabricmc.fabric.api.object.builder.v1.entity.FabricDefaultAttributeRegistry;
 import net.fabricmc.fabric.api.object.builder.v1.entity.FabricEntityTypeBuilder;
 import net.minecraft.entity.EntityDimensions;
@@ -16,7 +17,10 @@ public final class ModEntities {
 			ChaoCraft.id("chao"),
 			FabricEntityTypeBuilder.create(SpawnGroup.CREATURE, ChaoEntity::new)
 					.dimensions(EntityDimensions.fixed(0.70F, 0.85F))
-					.trackRangeBlocks(10)
+					// Server-side tracking/view distance. The default remains the validated
+					// 80-block vanilla-like baseline, but server owners can tune it before
+					// startup without adding any client-side render-distance hacks.
+					.trackRangeBlocks(ChaoServerConfig.get().viewDistanceBlocks())
 					.trackedUpdateRate(3)
 					.build()
 	);

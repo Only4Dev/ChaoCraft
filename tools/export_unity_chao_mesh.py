@@ -13,6 +13,7 @@ from pathlib import Path
 
 PROFILES = {
     "adult": ("Normal", "Swim", "Fly", "Run", "Power", "SizeDown"),
+    "chaos": ("SizeDown",),
     "child": (
         "NNormal", "NSwim", "NFly", "NRun", "NPower",
         "HNB", "HNormal", "HSwim", "HFly", "HRun", "HPower",
@@ -21,6 +22,7 @@ PROFILES = {
     ),
 }
 PARTS = ("Arms", "Belly", "Head", "Legs", "Tail", "Wings")
+CHAOS_PARTS = ("Arms", "Belly", "Head", "Legs", "Tail")
 MAGIC = b"CHM1"
 VERSION = 3
 
@@ -121,7 +123,19 @@ def parse_mesh(path: Path, required_morphs: tuple[str, ...]) -> dict:
             normal_deltas[vertex_index] = normal_delta
         morphs[channel_name] = (position_deltas, normal_deltas)
 
-    missing = [morph for morph in required_morphs if morph not in morphs]
+    # AssetRipper preserves a single inconsistent Dark Swim channel spelling ("normal").
+    # Resolve required channels case-insensitively while keeping ChaoCraft's canonical names.
+    lower_morphs = {key.lower(): value for key, value in morphs.items()}
+    canonical_morphs = {}
+    missing = []
+    for morph in required_morphs:
+        value = morphs.get(morph)
+        if value is None:
+            value = lower_morphs.get(morph.lower())
+        if value is None:
+            missing.append(morph)
+        else:
+            canonical_morphs[morph] = value
     if missing:
         raise ValueError(f"{name}: missing required morphs: {', '.join(missing)}")
 
@@ -132,7 +146,7 @@ def parse_mesh(path: Path, required_morphs: tuple[str, ...]) -> dict:
         "uv0": uv0,
         "indices": indices,
         "submeshes": submeshes,
-        "morphs": morphs,
+        "morphs": canonical_morphs,
     }
 
 
@@ -144,7 +158,8 @@ def write_string(output, value: str) -> None:
 
 def compile_family(input_dir: Path, family: str, output_path: Path, profile: str) -> None:
     morph_names = PROFILES[profile]
-    meshes = [parse_mesh(input_dir / f"{family}_{part}.asset", morph_names) for part in PARTS]
+    parts = CHAOS_PARTS if profile == "chaos" else PARTS
+    meshes = [parse_mesh(input_dir / f"{family}_{part}.asset", morph_names) for part in parts]
     output_path.parent.mkdir(parents=True, exist_ok=True)
     with output_path.open("wb") as output:
         output.write(MAGIC)

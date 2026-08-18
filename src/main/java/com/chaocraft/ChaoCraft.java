@@ -1,7 +1,9 @@
 package com.chaocraft;
 
 import com.chaocraft.command.ChaoCommands;
+import com.chaocraft.config.ChaoServerConfig;
 import com.chaocraft.entity.ModEntities;
+import com.chaocraft.dev.ChaoVisualLabNetworking;
 import net.fabricmc.api.ModInitializer;
 import net.minecraft.util.Identifier;
 import org.slf4j.Logger;
@@ -13,8 +15,11 @@ public class ChaoCraft implements ModInitializer {
 
 	@Override
 	public void onInitialize() {
+		// Load server-authoritative performance distances before ModEntities is initialized.
+		ChaoServerConfig.load();
 		ModEntities.register();
 		ChaoCommands.register();
+		ChaoVisualLabNetworking.registerServerReceivers();
 		LOGGER.info("ChaoCraft initialized.");
 	}
 

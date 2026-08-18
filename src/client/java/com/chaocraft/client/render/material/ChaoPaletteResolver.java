@@ -1,5 +1,6 @@
 package com.chaocraft.client.render.material;
 
+import com.chaocraft.client.render.family.ChaoAdultFamily;
 import com.chaocraft.visual.ChaoAppearanceState;
 import com.chaocraft.visual.ChaoMorphResolver;
 import com.chaocraft.visual.ChaoMorphWeights;
@@ -17,16 +18,28 @@ public final class ChaoPaletteResolver {
     }
 
     public static ChaoPaletteState resolve(ChaoAppearanceState state, ChaoMorphWeights weights) {
-        if (state.type() == ChaoVisualType.CHILD) {
-            return resolveChild(state, weights);
+        ChaoPaletteState palette;
+        if (state.type() == ChaoVisualType.CHAOS) {
+            palette = resolveChaos(state);
+        } else if (state.type() == ChaoVisualType.CHILD) {
+            palette = resolveChild(state, weights);
+        } else {
+            palette = ChaoAdultPaletteResolver.resolve(ChaoAdultFamily.resolve(state), state, weights);
         }
-        if (state.alignment() >= 50.0F) {
-            return resolveHeroNormal(state, weights);
-        }
-        if (state.alignment() <= -50.0F) {
-            return resolveDarkNormal(state, weights);
-        }
-        return resolveNeutralNormal(state, weights);
+
+        // ChaoMorphController.Update() overrides BodyCover after palette resolution
+        // whenever the real SA2 color field is not Normal.
+        ChaoColor bodyCover = ChaoBodyColorResolver.resolve(state.colorType(), palette.bodyCover());
+        return withBodyCover(palette, bodyCover);
+    }
+
+    private static ChaoPaletteState resolveChaos(ChaoAppearanceState state) {
+        ChaoColor emotion = state.alignment() >= 50.0F ? ChaoColor.rgb(255, 255, 0) : ChaoColor.WHITE;
+        return new ChaoPaletteState(
+                WHITE, WHITE, WHITE, WHITE, CLEAR, CLEAR,
+                WHITE, WHITE, WHITE, CLEAR,
+                WHITE, WHITE, emotion
+        );
     }
 
     private static ChaoPaletteState resolveNeutralNormal(ChaoAppearanceState state, ChaoMorphWeights weights) {
@@ -46,6 +59,15 @@ public final class ChaoPaletteResolver {
                 ChaoColor.rgb(0, 255, 255),
                 young, normal, swim, fly, run, power
         );
+        ChaoColor emotionBall = mix(
+                ChaoColor.rgb(255, 208, 135),
+                ChaoColor.rgb(255, 208, 0),
+                ChaoColor.rgb(255, 208, 0),
+                ChaoColor.rgb(255, 208, 0),
+                ChaoColor.rgb(255, 208, 0),
+                ChaoColor.rgb(255, 208, 0),
+                young, normal, swim, fly, run, power
+        );
 
         return new ChaoPaletteState(
                 WHITE,
@@ -57,7 +79,8 @@ public final class ChaoPaletteResolver {
                 ChaoColor.rgb(255, 120, 229),
                 ChaoColor.rgb(255, 210, 246),
                 bodyCover,
-                WHITE
+                WHITE,
+                emotionBall
         );
     }
 
@@ -94,9 +117,14 @@ public final class ChaoPaletteResolver {
                 WHITE, WHITE, WHITE, WHITE, ChaoColor.rgb(139, 208, 234), ChaoColor.rgb(255, 215, 0),
                 young, normal, swim, fly, run, power
         );
+        ChaoColor emotionBall = mix(
+                ChaoColor.rgb(135, 255, 255), ChaoColor.rgb(85, 184, 255), ChaoColor.rgb(255, 255, 160),
+                ChaoColor.rgb(255, 135, 111), ChaoColor.rgb(0, 255, 255), ChaoColor.rgb(255, 0, 255),
+                young, normal, swim, fly, run, power
+        );
 
         return new ChaoPaletteState(
-                WHITE, body, belly, extra, CLEAR, WHITE, wings, wingsBase, WHITE, WHITE
+                WHITE, body, belly, extra, CLEAR, WHITE, wings, wingsBase, WHITE, WHITE, emotionBall
         );
     }
 
@@ -119,6 +147,11 @@ public final class ChaoPaletteResolver {
                 ChaoColor.rgb(255, 255, 0), ChaoColor.rgb(0, 255, 255), ChaoColor.rgb(255, 255, 0),
                 young, normal, swim, fly, run, power
         );
+        ChaoColor emotionBall = mix(
+                ChaoColor.rgb(135, 135, 255), ChaoColor.rgb(85, 0, 208), ChaoColor.rgb(134, 0, 255),
+                ChaoColor.rgb(255, 134, 255), ChaoColor.rgb(255, 255, 0), ChaoColor.rgb(255, 183, 0),
+                young, normal, swim, fly, run, power
+        );
 
         return new ChaoPaletteState(
                 ChaoColor.rgb(49, 52, 49),
@@ -130,7 +163,8 @@ public final class ChaoPaletteResolver {
                 ChaoColor.rgb(49, 48, 49),
                 WHITE,
                 bodyCover,
-                wingsCover
+                wingsCover,
+                emotionBall
         );
     }
 
@@ -144,12 +178,37 @@ public final class ChaoPaletteResolver {
         float power = state.power() * age / 100.0F;
 
         ChaoMorphResolver.AlignmentWeights alignment = ChaoMorphResolver.resolveAlignment(state.alignment());
-        ChaoPaletteState neutral = childGroup(CN, young, normal, swim, fly, run, power);
+        Group neutralGroup = !state.monotone() && state.colorType() != com.chaocraft.visual.ChaoColorType.NORMAL ? CNC : CN;
+        Group darkGroup = !state.monotone() && state.colorType() != com.chaocraft.visual.ChaoColorType.NORMAL ? CDC : CD;
+        ChaoPaletteState neutral = withEmotionBall(
+                childGroup(neutralGroup, young, normal, swim, fly, run, power),
+                mix(
+                        ChaoColor.rgb(255, 255, 90), ChaoColor.rgb(255, 255, 0), ChaoColor.rgb(0, 184, 255),
+                        ChaoColor.rgb(255, 255, 0), ChaoColor.rgb(0, 255, 187), ChaoColor.rgb(255, 165, 57),
+                        young, normal, swim, fly, run, power
+                )
+        );
         if (alignment.hero() > 0.0F) {
-            return lerp(neutral, childGroup(CH, young, normal, swim, fly, run, power), alignment.hero() / 100.0F);
+            ChaoPaletteState hero = withEmotionBall(
+                    childGroup(CH, young, normal, swim, fly, run, power),
+                    mix(
+                            ChaoColor.rgb(0, 135, 255), ChaoColor.rgb(0, 135, 255), ChaoColor.rgb(131, 255, 0),
+                            ChaoColor.rgb(178, 135, 255), ChaoColor.rgb(255, 159, 162), ChaoColor.rgb(255, 255, 0),
+                            young, normal, swim, fly, run, power
+                    )
+            );
+            return lerp(neutral, hero, alignment.hero() / 100.0F);
         }
         if (alignment.dark() > 0.0F) {
-            return lerp(neutral, childGroup(CD, young, normal, swim, fly, run, power), alignment.dark() / 100.0F);
+            ChaoPaletteState dark = withEmotionBall(
+                    childGroup(darkGroup, young, normal, swim, fly, run, power),
+                    mix(
+                            ChaoColor.rgb(255, 134, 135), ChaoColor.rgb(255, 134, 135), ChaoColor.rgb(0, 183, 206),
+                            ChaoColor.rgb(255, 135, 255), ChaoColor.rgb(0, 0, 255), ChaoColor.rgb(255, 255, 0),
+                            young, normal, swim, fly, run, power
+                    )
+            );
+            return lerp(neutral, dark, alignment.dark() / 100.0F);
         }
         return neutral;
     }
@@ -165,7 +224,8 @@ public final class ChaoPaletteResolver {
                 mixChannel(group, Channel.WINGS, young, normal, swim, fly, run, power),
                 mixChannel(group, Channel.WINGS_BASE, young, normal, swim, fly, run, power),
                 WHITE,
-                WHITE
+                WHITE,
+                ChaoColor.WHITE
         );
     }
 
@@ -199,7 +259,24 @@ public final class ChaoPaletteResolver {
                 from.wings().lerp(to.wings(), amount),
                 from.wingsBase().lerp(to.wingsBase(), amount),
                 from.bodyCover().lerp(to.bodyCover(), amount),
-                from.wingsCover().lerp(to.wingsCover(), amount)
+                from.wingsCover().lerp(to.wingsCover(), amount),
+                from.emotionBall().lerp(to.emotionBall(), amount)
+        );
+    }
+
+    private static ChaoPaletteState withBodyCover(ChaoPaletteState state, ChaoColor bodyCover) {
+        return new ChaoPaletteState(
+                state.base(), state.body(), state.belly(), state.extra(), state.extra2(), state.extra3(),
+                state.horns(), state.wings(), state.wingsBase(), state.wingsExtra(),
+                bodyCover, state.wingsCover(), state.emotionBall()
+        );
+    }
+
+    private static ChaoPaletteState withEmotionBall(ChaoPaletteState state, ChaoColor emotionBall) {
+        return new ChaoPaletteState(
+                state.base(), state.body(), state.belly(), state.extra(), state.extra2(),
+                state.horns(), state.wings(), state.wingsBase(), state.bodyCover(), state.wingsCover(),
+                emotionBall
         );
     }
 
@@ -260,4 +337,24 @@ public final class ChaoPaletteResolver {
             p(v(0,50,38,255), v(0,226,170,255), v(0,0,0,0), v(0,0,0,255), v(255,255,255,0), v(0,50,38,255), v(55,0,232,255), v(55,0,232,255)),
             p(v(48,28,2,255), v(255,144,0,255), v(255,0,0,0), v(255,0,0,255), v(255,255,255,0), v(48,28,2,255), v(255,144,0,255), v(255,236,0,255))
     );
+    /** Colored two-tone Child neutral group (CNC) from Palettes.cs. */
+    private static final Group CNC = new Group(
+            p(v(132,242,255,255), v(254,253,84,255), v(132,242,255,255), v(132,242,255,0), v(255,255,255,0), v(132,242,255,255), v(255,120,229,255), v(255,210,246,255)),
+            p(v(255,255,255,255), v(255,255,255,255), v(132,242,255,255), v(132,242,255,0), v(255,255,255,0), v(132,242,255,255), v(255,120,229,255), v(255,210,246,255)),
+            p(v(255,255,255,255), v(255,255,255,255), v(132,242,255,255), v(132,242,255,0), v(255,255,255,0), v(132,242,255,255), v(0,139,255,255), v(0,255,255,255)),
+            p(v(255,255,255,255), v(255,255,255,255), v(132,242,255,255), v(132,242,255,0), v(255,255,255,0), v(132,242,255,255), v(255,148,0,255), v(255,255,0,255)),
+            p(v(255,255,255,255), v(255,255,255,255), v(132,242,255,255), v(132,242,255,0), v(255,255,255,0), v(132,242,255,255), v(255,82,0,255), v(255,220,0,255)),
+            p(v(255,255,255,255), v(255,255,255,255), v(132,242,255,255), v(132,242,255,0), v(255,255,255,0), v(132,242,255,255), v(111,0,77,255), v(0,255,192,255))
+    );
+
+    /** Colored two-tone Child dark group (CDC) from Palettes.cs. */
+    private static final Group CDC = new Group(
+            p(v(49,52,49,255), v(255,255,255,255), v(255,0,0,0), v(255,0,0,255), v(255,255,255,0), v(49,52,49,255), v(100,0,0,255), v(255,0,0,255)),
+            p(v(49,52,49,255), v(255,255,255,255), v(255,0,0,0), v(255,0,0,255), v(255,255,255,0), v(49,52,49,255), v(100,0,0,255), v(255,0,0,255)),
+            p(v(49,52,49,255), v(255,255,255,255), v(255,0,0,0), v(255,0,0,255), v(255,255,255,0), v(49,52,49,255), v(255,144,0,255), v(255,236,0,255)),
+            p(v(49,52,49,255), v(255,255,255,255), v(255,0,0,0), v(255,0,0,255), v(255,255,255,0), v(49,52,49,255), v(0,82,86,255), v(0,193,204,255)),
+            p(v(49,52,49,255), v(255,255,255,255), v(255,0,0,0), v(255,0,0,255), v(255,255,255,0), v(49,52,49,255), v(55,0,232,255), v(55,0,232,255)),
+            p(v(49,52,49,255), v(255,255,255,255), v(255,0,0,0), v(255,0,0,255), v(255,255,255,0), v(49,52,49,255), v(255,144,0,255), v(255,236,0,255))
+    );
+
 }

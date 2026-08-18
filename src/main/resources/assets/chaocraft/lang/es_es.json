@@ -1,3 +1,5 @@
 {
-  "entity.chaocraft.chao": "Chao"
+  "entity.chaocraft.chao": "Chao",
+  "category.chaocraft": "ChaoCraft",
+  "key.chaocraft.visual_lab": "Abrir Visual Lab"
 }

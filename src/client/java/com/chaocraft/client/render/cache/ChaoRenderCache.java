@@ -4,9 +4,12 @@ import com.chaocraft.client.render.material.ChaoPaletteState;
 import com.chaocraft.client.render.mesh.ChaoMeshModel;
 import com.chaocraft.entity.ChaoEntity;
 import com.chaocraft.visual.ChaoAppearanceState;
+import com.chaocraft.visual.ChaoAnimalParts.Slot;
+import com.chaocraft.visual.ChaoAnimalType;
 
 import java.util.IdentityHashMap;
 import java.util.Map;
+import java.util.UUID;
 import java.util.WeakHashMap;
 
 /**
@@ -32,6 +35,11 @@ public final class ChaoRenderCache {
         return rebuilt;
     }
 
+    /** Releases one entity's prepared CPU morph arrays immediately. */
+    public void remove(UUID entityId) {
+        entries.entrySet().removeIf(entry -> entry.getKey() == null || entry.getKey().getUuid().equals(entityId));
+    }
+
     public void clear() {
         entries.clear();
     }
@@ -39,10 +47,28 @@ public final class ChaoRenderCache {
     private static Entry build(ChaoAppearanceState state, ChaoMeshModel model,
             float[] morphWeights, ChaoPaletteState palette) {
         Map<ChaoMeshModel.Segment, PreparedSegment> segments = new IdentityHashMap<>();
+        int sizeDownIndex = model.morphIndex("SizeDown");
         for (ChaoMeshModel.Segment segment : model.segments()) {
-            segments.put(segment, prepareSegment(segment, morphWeights));
+            float[] segmentWeights = morphWeights;
+            if (sizeDownIndex >= 0 && isBaseSegmentReplaced(segment.name(), state)) {
+                // Chao Viewer SetBlendShapeWeights() retracts the original body
+                // segment through its SizeDown key when an animal part occupies
+                // Arms/Legs/Tail/Wings. It does not simply hide the mesh.
+                segmentWeights = new float[morphWeights.length];
+                segmentWeights[sizeDownIndex] = 1.0F;
+            }
+            segments.put(segment, prepareSegment(segment, segmentWeights));
         }
         return new Entry(state, model, palette, segments);
+    }
+
+    private static boolean isBaseSegmentReplaced(String segmentName, ChaoAppearanceState state) {
+        String name = segmentName.toLowerCase(java.util.Locale.ROOT);
+        if (name.contains("arm")) return state.animalParts().get(Slot.ARMS) != ChaoAnimalType.NONE;
+        if (name.contains("leg") || name.contains("feet")) return state.animalParts().get(Slot.LEGS) != ChaoAnimalType.NONE;
+        if (name.contains("tail")) return state.animalParts().get(Slot.TAIL) != ChaoAnimalType.NONE;
+        if (name.contains("wing")) return state.animalParts().get(Slot.WINGS) != ChaoAnimalType.NONE;
+        return false;
     }
 
     private static PreparedSegment prepareSegment(ChaoMeshModel.Segment segment, float[] weights) {

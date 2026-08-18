@@ -15,6 +15,7 @@ public final class ChaoMeshLoader {
 	private static final int VERSION_LEGACY_ADULT = 1;
 	private static final int VERSION_NAMED_MORPHS = 2;
 	private static final int VERSION_SUBMESHES = 3;
+	private static final long MAX_MODEL_ARRAY_BYTES = 128L * 1024L * 1024L;
 
 	private ChaoMeshLoader() {
 	}
@@ -53,6 +54,7 @@ public final class ChaoMeshLoader {
 			}
 
 			int morphCount = morphNames.size();
+			long estimatedModelBytes = 0L;
 			List<ChaoMeshModel.Segment> segments = new ArrayList<>(segmentCount);
 			for (int segmentIndex = 0; segmentIndex < segmentCount; segmentIndex++) {
 				String name = data.readString();
@@ -60,6 +62,17 @@ public final class ChaoMeshLoader {
 				int indexCount = data.readInt();
 				if (vertexCount < 1 || vertexCount > 100_000 || indexCount < 3 || indexCount > 1_000_000) {
 					throw new IOException("Invalid geometry counts for segment " + name);
+				}
+
+				// Resource packs are external input. Bound the arrays before allocating them
+				// so a malformed .cmesh cannot request hundreds of MB/GB of heap/native
+				// follow-up buffers even if each individual count passes its simple range.
+				long floatsPerVertex = 8L + (long) morphCount * 6L;
+				long segmentBytes = (long) vertexCount * floatsPerVertex * Float.BYTES
+						+ (long) indexCount * Integer.BYTES;
+				estimatedModelBytes += segmentBytes;
+				if (segmentBytes < 0L || estimatedModelBytes > MAX_MODEL_ARRAY_BYTES) {
+					throw new IOException("Chao mesh exceeds safe runtime memory budget: " + estimatedModelBytes + " bytes");
 				}
 
 				List<ChaoMeshModel.Submesh> submeshes;
