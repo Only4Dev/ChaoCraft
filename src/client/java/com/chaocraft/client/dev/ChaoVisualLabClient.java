@@ -119,6 +119,16 @@ public final class ChaoVisualLabClient {
         ClientPlayNetworking.send(ChaoVisualLabNetworking.SPAWN_CHILD_EXTREMES, PacketByteBufs.empty());
     }
 
+    public static void spawnAnimationStressMatrix(int count) {
+        if (count >= 100) {
+            ChaoPerformanceWatchdog.event("MATRIX_ANIMATION_100_REQUEST");
+            ClientPlayNetworking.send(ChaoVisualLabNetworking.SPAWN_ANIMATION_STRESS_100, PacketByteBufs.empty());
+        } else {
+            ChaoPerformanceWatchdog.event("MATRIX_ANIMATION_50_REQUEST");
+            ClientPlayNetworking.send(ChaoVisualLabNetworking.SPAWN_ANIMATION_STRESS_50, PacketByteBufs.empty());
+        }
+    }
+
     public static void clearAdultMatrix() {
         ChaoPerformanceWatchdog.event("MATRIX_CLEAR_REQUEST");
         ClientPlayNetworking.send(ChaoVisualLabNetworking.CLEAR_ADULT_MATRIX, PacketByteBufs.empty());

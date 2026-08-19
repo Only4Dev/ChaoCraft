@@ -304,6 +304,12 @@ public final class ChaoVisualLabScreen extends Screen {
                 .dimensions(x, y, half, WIDGET_HEIGHT).build());
         addDrawableChild(ButtonWidget.builder(Text.literal("Clear Matrix"), button -> clearMatrix())
                 .dimensions(x + half + GAP, y, half, WIDGET_HEIGHT).build());
+        y += WIDGET_HEIGHT + GAP;
+
+        addDrawableChild(ButtonWidget.builder(Text.literal("Anim Stress (50)"), button -> spawnAnimationStress(50))
+                .dimensions(x, y, half, WIDGET_HEIGHT).build());
+        addDrawableChild(ButtonWidget.builder(Text.literal("Anim Ultimate (100)"), button -> spawnAnimationStress(100))
+                .dimensions(x + half + GAP, y, half, WIDGET_HEIGHT).build());
     }
 
     private ChaoAnimationClip selectedAnimation() {
@@ -631,6 +637,9 @@ public final class ChaoVisualLabScreen extends Screen {
             return;
         }
         draft = next;
+        if (activeTab == LabTab.FACE) {
+            ChaoRenderMetrics.onPreviewFaceChange();
+        }
         if (!draft.type().isChild()) {
             lastAdultType = draft.type();
         }
@@ -867,6 +876,11 @@ public final class ChaoVisualLabScreen extends Screen {
     private void spawnChildExtremes() {
         ChaoVisualLabClient.spawnChildExtremes();
         flash("Spawning 15 canonical Child alignment/evolution endpoints");
+    }
+
+    private void spawnAnimationStress(int count) {
+        ChaoVisualLabClient.spawnAnimationStressMatrix(count);
+        flash("Spawning " + count + " randomized animated Chao");
     }
 
     private void clearMatrix() {

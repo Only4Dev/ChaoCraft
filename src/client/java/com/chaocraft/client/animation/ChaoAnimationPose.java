@@ -69,6 +69,60 @@ public final class ChaoAnimationPose {
         return new ChaoAnimationPose(deltas);
     }
 
+    /**
+     * Samples the same universal 0..39 SA2 motion against a model-specific bind
+     * profile. CP12I.1 adds this path without switching the approved Child
+     * renderer to it yet; CP12I.2 can opt one Adult model into this overload for
+     * a controlled SA Tools comparison.
+     */
+    public static ChaoAnimationPose sample(
+            ChaoAnimationClip clip,
+            double frame,
+            ChaoSa2BindProfile bindProfile,
+            boolean childCoordinateSpace) {
+        if (clip == null) return identity();
+        if (bindProfile == null) {
+            throw new IllegalArgumentException("SA2 Chao animation requires a bind profile");
+        }
+
+        Matrix4f[] animatedWorld = new Matrix4f[NODE_COUNT];
+        Matrix4f[] deltas = new Matrix4f[NODE_COUNT];
+
+        for (int i = 0; i < NODE_COUNT; i++) {
+            ChaoSa2BindProfile.Node bind = bindProfile.node(i);
+            ChaoAnimationClip.NodeTrack track = clip.nodes().get(i);
+
+            Vector3f position = track == null || track.positions().isEmpty()
+                    ? bind.position()
+                    : samplePosition(track.positions(), frame);
+            Vector3f rotation = track == null || track.rotations().isEmpty()
+                    ? bind.rotation()
+                    : sampleRotation(track.rotations(), frame);
+
+            Matrix4f animatedLocal =
+                    ChaoSa2BindProfile.composeAnimatedLocal(position, rotation, bind);
+
+            int parent = ChaoSa2RigNodeRegistry.node(i).parent();
+            if (parent >= 0) {
+                animatedWorld[i] = new Matrix4f(animatedWorld[parent]).mul(animatedLocal);
+            } else {
+                animatedWorld[i] = animatedLocal;
+            }
+
+            Matrix4f delta = new Matrix4f(animatedWorld[i])
+                    .mul(bindProfile.inverseBindWorld(i));
+
+            if (childCoordinateSpace) {
+                delta = new Matrix4f(CHILD_COORDINATE)
+                        .mul(delta)
+                        .mul(CHILD_COORDINATE_INVERSE);
+            }
+            deltas[i] = delta;
+        }
+
+        return new ChaoAnimationPose(deltas);
+    }
+
     public static ChaoAnimationPose identity() {
         Matrix4f[] deltas = new Matrix4f[NODE_COUNT];
         for (int i = 0; i < NODE_COUNT; i++) {

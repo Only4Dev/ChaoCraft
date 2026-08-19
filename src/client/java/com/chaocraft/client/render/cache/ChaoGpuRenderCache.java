@@ -69,12 +69,21 @@ public final class ChaoGpuRenderCache {
     private static final long MAX_ESTIMATED_CACHE_BYTES = 384L * 1024L * 1024L;
     private static final long BUILD_RESERVE_BYTES = 8L * 1024L * 1024L;
 
-    // At most one expensive cache miss every 50 ms. Existing/shared VBO hits are unlimited.
-    private static final long BUILD_WINDOW_NANOS = 50_000_000L;
+    // At most one expensive cache miss per ~60 Hz render interval. This keeps
+    // world-entry/matrix warm-up responsive without allowing multi-build bursts
+    // inside a single frame. Existing/shared VBO hits remain unlimited.
+    private static final long BUILD_WINDOW_NANOS = 16_666_667L;
     private static final long PENDING_BUILD_STALE_TICKS = 40L;
+    // Entity bindings are only needed while an entity is actually rendered.
+    // Frustum-culled or discarded matrix Chao otherwise kept SharedEntry.users
+    // permanently non-empty, preventing normal LRU/idle eviction and eventually
+    // exhausting native memory after repeated stress matrices. Keep the shared
+    // immutable VBO warm, but release a binding after ~2 seconds without a draw.
+    private static final long STALE_BINDING_TICKS = 40L;
 
     private final LinkedHashMap<CacheKey, SharedEntry> shared = new LinkedHashMap<>(64, 0.75F, true);
     private final Map<UUID, CacheKey> bindings = new HashMap<>();
+    private final Map<UUID, Long> bindingLastSeenTick = new HashMap<>();
 
     // Deduplicated first-time build queue. A visual state waits once instead of
     // every entity retrying the 50 ms gate every rendered frame.
@@ -91,9 +100,15 @@ public final class ChaoGpuRenderCache {
 
     public Entry get(ChaoEntity entity, ChaoAppearanceState state, ChaoMeshModel model,
             int packedLight, long worldTick, Supplier<List<DrawBatch>> batchBuilder) {
+        return get(entity, state, model, packedLight, worldTick, 0, batchBuilder);
+    }
+
+    /** Layout variant 0 is production; non-zero variants are explicit QA render layouts. */
+    public Entry get(ChaoEntity entity, ChaoAppearanceState state, ChaoMeshModel model,
+            int packedLight, long worldTick, int layoutVariant, Supplier<List<DrawBatch>> batchBuilder) {
         prepareForWorldTick(worldTick);
         UUID entityId = entity.getUuid();
-        CacheKey wanted = new CacheKey(state, model, packedLight);
+        CacheKey wanted = new CacheKey(state, model, packedLight, layoutVariant);
         CacheKey previousKey = bindings.get(entityId);
 
         SharedEntry cached = shared.get(wanted);
@@ -152,7 +167,7 @@ public final class ChaoGpuRenderCache {
             return previousEntry(previousKey, worldTick);
         }
         Entry entry = new Entry(packedLight, builtBatches);
-        SharedEntry rebuilt = new SharedEntry(entry, worldTick);
+        SharedEntry rebuilt = new SharedEntry(entry, worldTick, false);
         shared.put(wanted, rebuilt);
         estimatedCacheBytes += entry.estimatedBytes();
         bind(entityId, wanted, rebuilt, worldTick);
@@ -164,9 +179,41 @@ public final class ChaoGpuRenderCache {
         return entry;
     }
 
+    /**
+     * Startup-only direct warm path. It bypasses the runtime build-rate gate but
+     * still obeys the same shared-cache memory budget and identity contract.
+     */
+    public Entry prewarm(ChaoAppearanceState state, ChaoMeshModel model, int packedLight,
+            long worldTick, int layoutVariant, Supplier<List<DrawBatch>> batchBuilder) {
+        CacheKey key = new CacheKey(state, model, packedLight, layoutVariant);
+        SharedEntry existing = shared.get(key);
+        if (existing != null && !existing.entry.isClosed()) {
+            existing.lastSeenTick = worldTick;
+            return existing.entry;
+        }
+        if (existing != null) {
+            shared.remove(key);
+            estimatedCacheBytes = Math.max(0L, estimatedCacheBytes - existing.entry.estimatedBytes());
+        }
+
+        trimForReserve(key);
+        List<DrawBatch> batches = batchBuilder.get();
+        Entry entry = new Entry(packedLight, batches);
+        // Startup canonical states are a deliberately tiny (~21 MiB currently)
+        // immutable working set. Keep them resident across world entry instead of
+        // letting normal 10-second idle pruning erase the warmup before gameplay.
+        // Emergency native-OOM recovery may still discard them.
+        shared.put(key, new SharedEntry(entry, worldTick, true));
+        estimatedCacheBytes += entry.estimatedBytes();
+        trimGlobalBudget(key);
+        updateMetrics();
+        return entry;
+    }
+
     /** Releases one entity binding while retaining its shared VBO warm. */
     public void remove(UUID entityId) {
         CacheKey key = bindings.remove(entityId);
+        bindingLastSeenTick.remove(entityId);
         if (key != null) {
             SharedEntry entry = shared.get(key);
             if (entry != null) {
@@ -185,6 +232,7 @@ public final class ChaoGpuRenderCache {
      */
     public void removeAndEvict(UUID entityId) {
         CacheKey key = bindings.remove(entityId);
+        bindingLastSeenTick.remove(entityId);
         if (key == null) {
             updateMetrics();
             return;
@@ -216,11 +264,17 @@ public final class ChaoGpuRenderCache {
 
     /** True when the entity is already bound to this exact visual state. */
     public boolean isBoundTo(UUID entityId, ChaoAppearanceState state, ChaoMeshModel model, int packedLight) {
+        return isBoundTo(entityId, state, model, packedLight, 0);
+    }
+
+    public boolean isBoundTo(UUID entityId, ChaoAppearanceState state, ChaoMeshModel model,
+            int packedLight, int layoutVariant) {
         CacheKey key = bindings.get(entityId);
         return key != null
                 && key.state().equals(state)
                 && key.model() == model
                 && key.packedLight() == packedLight
+                && key.layoutVariant() == layoutVariant
                 && getBound(entityId) != null;
     }
 
@@ -230,6 +284,7 @@ public final class ChaoGpuRenderCache {
      */
     public void detachWorldBindingsKeepWarm() {
         bindings.clear();
+        bindingLastSeenTick.clear();
         for (SharedEntry entry : shared.values()) {
             entry.users.clear();
         }
@@ -249,6 +304,7 @@ public final class ChaoGpuRenderCache {
      */
     public void beginWorld(long worldTick) {
         bindings.clear();
+        bindingLastSeenTick.clear();
         for (SharedEntry entry : shared.values()) {
             entry.users.clear();
             entry.lastSeenTick = worldTick;
@@ -301,6 +357,7 @@ public final class ChaoGpuRenderCache {
         }
         shared.clear();
         bindings.clear();
+        bindingLastSeenTick.clear();
         buildQueue.clear();
         queuedBuilds.clear();
         pendingLastRequestedTick.clear();
@@ -370,12 +427,14 @@ public final class ChaoGpuRenderCache {
 
     private void bind(UUID entityId, CacheKey key, SharedEntry entry, long worldTick) {
         bindings.put(entityId, key);
+        bindingLastSeenTick.put(entityId, worldTick);
         entry.users.add(entityId);
         entry.lastSeenTick = worldTick;
     }
 
     private void unlink(UUID entityId, CacheKey key) {
         bindings.remove(entityId, key);
+        bindingLastSeenTick.remove(entityId);
         SharedEntry old = shared.get(key);
         if (old == null) return;
         // State changes only detach the entity. The old immutable VBO remains
@@ -390,16 +449,46 @@ public final class ChaoGpuRenderCache {
         }
     }
 
+    /**
+     * Detach entities that have not reached the renderer recently. The immutable
+     * visual-state VBO remains in the shared warm pool, so looking back at an
+     * off-screen Chao normally becomes an immediate cache hit. This primarily
+     * prevents discarded Visual Lab matrices from pinning hundreds of entries.
+     */
+    private void releaseStaleBindings(long worldTick) {
+        Iterator<Map.Entry<UUID, Long>> iterator = bindingLastSeenTick.entrySet().iterator();
+        while (iterator.hasNext()) {
+            Map.Entry<UUID, Long> seen = iterator.next();
+            long lastSeen = seen.getValue();
+            if (worldTick >= lastSeen && worldTick - lastSeen <= STALE_BINDING_TICKS) {
+                continue;
+            }
+
+            UUID entityId = seen.getKey();
+            CacheKey key = bindings.remove(entityId);
+            if (key != null) {
+                SharedEntry entry = shared.get(key);
+                if (entry != null) {
+                    entry.users.remove(entityId);
+                }
+            }
+            iterator.remove();
+        }
+    }
+
     private void prune(long worldTick) {
         if (lastPruneTick != Long.MIN_VALUE && worldTick - lastPruneTick < PRUNE_INTERVAL) return;
         lastPruneTick = worldTick;
+
+        releaseStaleBindings(worldTick);
 
         int evicted = 0;
         Iterator<Map.Entry<CacheKey, SharedEntry>> iterator = shared.entrySet().iterator();
         while (iterator.hasNext() && evicted < MAX_BACKGROUND_EVICTIONS_PER_PRUNE) {
             Map.Entry<CacheKey, SharedEntry> mapEntry = iterator.next();
             SharedEntry entry = mapEntry.getValue();
-            if (!entry.users.isEmpty() || worldTick - entry.lastSeenTick <= STALE_TICKS) continue;
+            if (entry.pinned || !entry.users.isEmpty()
+                    || worldTick - entry.lastSeenTick <= STALE_TICKS) continue;
             iterator.remove();
             bindings.entrySet().removeIf(binding -> binding.getValue().equals(mapEntry.getKey()));
             closeEntry(entry, "stale");
@@ -423,7 +512,7 @@ public final class ChaoGpuRenderCache {
 
         long idleBytes = 0L;
         for (SharedEntry entry : shared.values()) {
-            if (entry.users.isEmpty()) {
+            if (!entry.pinned && entry.users.isEmpty()) {
                 idleBytes += entry.entry.estimatedBytes();
             }
         }
@@ -437,7 +526,7 @@ public final class ChaoGpuRenderCache {
         while (iterator.hasNext() && idleBytes > MAX_IDLE_CACHE_BYTES && evicted < maxEvictions) {
             Map.Entry<CacheKey, SharedEntry> candidate = iterator.next();
             SharedEntry entry = candidate.getValue();
-            if (!entry.users.isEmpty()) {
+            if (entry.pinned || !entry.users.isEmpty()) {
                 continue;
             }
 
@@ -487,6 +576,7 @@ public final class ChaoGpuRenderCache {
         while (iterator.hasNext()) {
             Map.Entry<CacheKey, SharedEntry> candidate = iterator.next();
             if (candidate.getKey().equals(protectedKey)) continue;
+            if (candidate.getValue().pinned) continue;
 
             // Never evict a VBO still referenced by an active Chao. Otherwise the
             // next frame immediately rebuilds the same state and creates the
@@ -523,17 +613,19 @@ public final class ChaoGpuRenderCache {
      * this key: animation belongs to draw-time GPU transforms so a walking Chao
      * does not rebuild geometry every frame.
      */
-    private record CacheKey(ChaoAppearanceState state, ChaoMeshModel model, int packedLight) {
+    private record CacheKey(ChaoAppearanceState state, ChaoMeshModel model, int packedLight, int layoutVariant) {
     }
 
     private static final class SharedEntry {
         private final Entry entry;
         private final Set<UUID> users = new HashSet<>();
+        private final boolean pinned;
         private long lastSeenTick;
 
-        private SharedEntry(Entry entry, long lastSeenTick) {
+        private SharedEntry(Entry entry, long lastSeenTick, boolean pinned) {
             this.entry = entry;
             this.lastSeenTick = lastSeenTick;
+            this.pinned = pinned;
         }
     }
 

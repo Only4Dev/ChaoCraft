@@ -26,6 +26,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.UUID;
 import java.util.WeakHashMap;
+import java.util.Random;
 
 /**
  * Server-authoritative networking for the in-game Visual Lab.
@@ -44,6 +45,8 @@ public final class ChaoVisualLabNetworking {
     public static final Identifier SPAWN_REFLECTION_MATRIX = ChaoCraft.id("visual_lab/spawn_reflection_matrix");
     public static final Identifier SPAWN_ANIMAL_MATRIX = ChaoCraft.id("visual_lab/spawn_animal_matrix");
     public static final Identifier CLEAR_ADULT_MATRIX = ChaoCraft.id("visual_lab/clear_adult_matrix");
+    public static final Identifier SPAWN_ANIMATION_STRESS_50 = ChaoCraft.id("visual_lab/spawn_animation_stress_50");
+    public static final Identifier SPAWN_ANIMATION_STRESS_100 = ChaoCraft.id("visual_lab/spawn_animation_stress_100");
 
     private static final String MATRIX_TAG = "chaocraft_visual_lab_matrix";
     private static final long MATRIX_ACTION_COOLDOWN_TICKS = 10L;
@@ -93,6 +96,12 @@ public final class ChaoVisualLabNetworking {
             ChaoAppearanceState baseState = readState(buf);
             server.execute(() -> spawnAnimalMatrix(player, baseState));
         });
+
+        ServerPlayNetworking.registerGlobalReceiver(SPAWN_ANIMATION_STRESS_50, (server, player, handler, buf, responseSender) ->
+                server.execute(() -> spawnAnimationStressMatrix(player, 50)));
+
+        ServerPlayNetworking.registerGlobalReceiver(SPAWN_ANIMATION_STRESS_100, (server, player, handler, buf, responseSender) ->
+                server.execute(() -> spawnAnimationStressMatrix(player, 100)));
 
         ServerPlayNetworking.registerGlobalReceiver(CLEAR_ADULT_MATRIX, (server, player, handler, buf, responseSender) ->
                 server.execute(() -> clearAdultMatrix(player)));
@@ -294,12 +303,10 @@ public final class ChaoVisualLabNetworking {
                 int column = colorIndex % 7;
                 int row = tone * 2 + localRow;
                 ChaoColorType color = colors[colorIndex];
-                // Preserve the Visual Lab draft's family/alignment/evolution so the
-                // same 28-case audit can be reused for Child, every adult family,
-                // and Chaos instead of hard-coding Neutral Normal. Face/emotion
-                // settings are preserved as well because this is a visual audit tool.
-                ChaoAppearanceState state = baseState
-                        .withHeadDeco(ChaoHeadDecoType.NONE)
+                // Preserve only body family/alignment/evolution. Matrix QA must not
+                // inherit Animal Parts, HeadDeco, face, emotion or reflection from
+                // whatever happens to be open in the F8 preview.
+                ChaoAppearanceState state = matrixBodyBase(baseState)
                         .withColorType(color)
                         .withMonotone(tone == 1);
                 Vec3d position = base
@@ -321,8 +328,7 @@ public final class ChaoVisualLabNetworking {
         ChaoReflectionType[] values = ChaoReflectionType.values();
         for (int i = 0; i < values.length; i++) {
             int col = i % 6, row = i / 6;
-            ChaoAppearanceState state = baseState
-                    .withHeadDeco(ChaoHeadDecoType.NONE)
+            ChaoAppearanceState state = matrixBodyBase(baseState)
                     .withReflectionType(values[i]);
             Vec3d position = base.add(right.multiply((col - 2.5D) * 2.15D)).add(forward.multiply(row * 2.5D));
             spawnMatrixChao(world, player, position, state, "REF-" + values[i].name());
@@ -345,8 +351,7 @@ public final class ChaoVisualLabNetworking {
             // Animal Matrix isolates Animal Parts. Carrying the preview's HeadDeco
             // duplicated an unrelated attachment across every matrix entity and
             // obscured both visual QA and GPU-cache stress results.
-            ChaoAppearanceState state = baseState
-                    .withHeadDeco(ChaoHeadDecoType.NONE)
+            ChaoAppearanceState state = matrixBodyBase(baseState)
                     .withAnimalParts(all);
             Vec3d position = base.add(right.multiply((col - 3.0D) * 2.15D)).add(forward.multiply(row * 2.5D));
             spawnMatrixChao(world, player, position, state, "ANI-" + animal.name());
@@ -445,13 +450,97 @@ public final class ChaoVisualLabNetworking {
         };
     }
 
+    /**
+     * Matrix tools must isolate the property under test instead of cloning every
+     * accessory/facial choice currently present in the F8 preview. Only the body
+     * family/morph controls are inherited from the draft.
+     */
+    private static ChaoAppearanceState matrixBodyBase(ChaoAppearanceState source) {
+        ChaoAppearanceState defaults = ChaoAppearanceState.DEFAULT;
+        return new ChaoAppearanceState(
+                source.type(), source.age(), source.alignment(),
+                source.swim(), source.fly(), source.run(), source.power(),
+                defaults.colorType(), defaults.monotone(), defaults.reflectionType(),
+                ChaoAnimalParts.NONE, ChaoHeadDecoType.NONE,
+                defaults.customEyes(), defaults.eyes(), defaults.eyelid(),
+                defaults.mouth(), defaults.customMouth(), defaults.mouthMid(), defaults.mouthSide(),
+                defaults.customEmotionBall(), defaults.neutralBall(), defaults.heroBall(), defaults.darkBall(),
+                defaults.tiltedHalo());
+    }
+
+    private static void spawnAnimationStressMatrix(ServerPlayerEntity player, int count) {
+        if (!canUseLab(player) || !allowMatrixAction(player)) return;
+        clearAdultMatrixInternal(player);
+
+        ServerWorld world = player.getServerWorld();
+        Vec3d forward = horizontalUnit(player.getRotationVec(1.0F));
+        Vec3d right = new Vec3d(-forward.z, 0.0D, forward.x);
+        Vec3d base = player.getPos().add(forward.multiply(6.0D));
+        int columns = 10;
+        Random random = new Random(world.getSeed() ^ player.getUuid().getLeastSignificantBits() ^ (count * 0x9E3779B97F4A7C15L));
+
+        ChaoVisualType[] types = ChaoVisualType.values();
+        ChaoColorType[] colors = ChaoColorType.values();
+        ChaoReflectionType[] reflections = ChaoReflectionType.values();
+        ChaoAnimalType[] animals = ChaoAnimalType.values();
+        ChaoHeadDecoType[] decos = ChaoHeadDecoType.values();
+
+        for (int i = 0; i < count; i++) {
+            ChaoVisualType type = types[random.nextInt(types.length)];
+            float age = type == ChaoVisualType.CHILD ? random.nextFloat() : 1.0F;
+            float alignment = -100.0F + random.nextFloat() * 200.0F;
+
+            // Constructor performs the same authoritative normalization as gameplay.
+            ChaoAnimalParts parts = new ChaoAnimalParts(
+                    randomAnimal(random, animals), randomAnimal(random, animals),
+                    randomAnimal(random, animals), randomAnimal(random, animals),
+                    randomAnimal(random, animals), randomAnimal(random, animals),
+                    randomAnimal(random, animals), randomAnimal(random, animals));
+
+            boolean customBall = random.nextBoolean();
+            ChaoAppearanceState state = new ChaoAppearanceState(
+                    type, age, alignment,
+                    random.nextFloat() * 100.0F, random.nextFloat() * 100.0F,
+                    random.nextFloat() * 100.0F, random.nextFloat() * 100.0F,
+                    colors[random.nextInt(colors.length)], random.nextBoolean(),
+                    reflections[random.nextInt(reflections.length)],
+                    parts, decos[random.nextInt(decos.length)],
+                    random.nextBoolean(), random.nextInt(13), random.nextInt(3),
+                    random.nextInt(13), random.nextBoolean(), random.nextInt(19), random.nextInt(19),
+                    customBall, random.nextBoolean(), random.nextBoolean(), random.nextBoolean(),
+                    random.nextBoolean());
+
+            int col = i % columns;
+            int row = i / columns;
+            Vec3d position = base
+                    .add(right.multiply((col - 4.5D) * 2.1D))
+                    .add(forward.multiply(row * 2.25D));
+
+            // Index is resolved modulo the loaded client repository, so every
+            // matrix member gets a stable different clip without networking clip data.
+            spawnMatrixChao(world, player, position, state,
+                    "ANIM-" + (i + 1), i, random.nextInt(1000));
+        }
+    }
+
+    private static ChaoAnimalType randomAnimal(Random random, ChaoAnimalType[] animals) {
+        // Include NONE often enough to produce realistic mixed attachment load.
+        return animals[random.nextInt(animals.length)];
+    }
+
     private static void spawnMatrixChao(ServerWorld world, ServerPlayerEntity player, Vec3d position,
             ChaoAppearanceState state, String name) {
+        spawnMatrixChao(world, player, position, state, name, -1, 0);
+    }
+
+    private static void spawnMatrixChao(ServerWorld world, ServerPlayerEntity player, Vec3d position,
+            ChaoAppearanceState state, String name, int animationIndex, int animationPhase) {
         // Matrix tools are stress/QA helpers, not gameplay. Stagger their creation
-        // so 34/75 entities do not all enter tracking and trigger client VBO work
+        // so large matrices do not all enter tracking and request client VBO work
         // in the same server tick. Final matrix contents are unchanged.
         MATRIX_SPAWN_QUEUE.addLast(new PendingMatrixSpawn(
-                player.getUuid(), world, position, state, name, player.getYaw() + 180.0F));
+                player.getUuid(), world, position, state, name, player.getYaw() + 180.0F,
+                animationIndex, animationPhase));
     }
 
     private static void drainMatrixQueue(net.minecraft.server.MinecraftServer server) {
@@ -464,6 +553,9 @@ public final class ChaoVisualLabNetworking {
             Vec3d position = pending.position();
             chao.refreshPositionAndAngles(position.x, position.y, position.z, pending.yaw(), 0.0F);
             chao.setAppearanceState(pending.state());
+            if (pending.animationIndex() >= 0) {
+                chao.setVisualLabAnimation(pending.animationIndex(), pending.animationPhase());
+            }
             chao.addCommandTag(MATRIX_TAG);
             chao.setCustomName(Text.literal(pending.name()));
             chao.setCustomNameVisible(false);
@@ -543,7 +635,8 @@ public final class ChaoVisualLabNetworking {
     }
 
     private record PendingMatrixSpawn(UUID playerId, ServerWorld world, Vec3d position,
-            ChaoAppearanceState state, String name, float yaw) {
+            ChaoAppearanceState state, String name, float yaw,
+            int animationIndex, int animationPhase) {
     }
 
     private static final class RateState {

@@ -43,6 +43,12 @@ public final class ChaoRenderCache {
         entries.clear();
     }
 
+    /** One-shot preparation for startup warmup; caller does not retain the arrays. */
+    public static Entry prepare(ChaoAppearanceState state, ChaoMeshModel model,
+            float[] morphWeights, ChaoPaletteState palette) {
+        return build(state, model, morphWeights, palette);
+    }
+
     private static Entry build(ChaoAppearanceState state, ChaoMeshModel model,
             float[] morphWeights, ChaoPaletteState palette) {
         Map<ChaoMeshModel.Segment, PreparedSegment> segments = new IdentityHashMap<>();

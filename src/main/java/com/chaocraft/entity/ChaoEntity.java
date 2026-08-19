@@ -94,6 +94,10 @@ public class ChaoEntity extends PathAwareEntity {
     private static final TrackedData<Boolean> HERO_BALL = DataTracker.registerData(ChaoEntity.class, TrackedDataHandlerRegistry.BOOLEAN);
     private static final TrackedData<Boolean> DARK_BALL = DataTracker.registerData(ChaoEntity.class, TrackedDataHandlerRegistry.BOOLEAN);
     private static final TrackedData<Boolean> TILTED_HALO = DataTracker.registerData(ChaoEntity.class, TrackedDataHandlerRegistry.BOOLEAN);
+    // Development-only animation stress metadata. -1 means normal gameplay rendering.
+    // These fields are intentionally not persisted to NBT.
+    private static final TrackedData<Integer> VISUAL_LAB_ANIMATION = DataTracker.registerData(ChaoEntity.class, TrackedDataHandlerRegistry.INTEGER);
+    private static final TrackedData<Integer> VISUAL_LAB_ANIMATION_PHASE = DataTracker.registerData(ChaoEntity.class, TrackedDataHandlerRegistry.INTEGER);
 
     public ChaoEntity(EntityType<? extends ChaoEntity> entityType, World world) {
         super(entityType, world);
@@ -152,6 +156,22 @@ public class ChaoEntity extends PathAwareEntity {
         this.dataTracker.startTracking(HERO_BALL, defaults.heroBall());
         this.dataTracker.startTracking(DARK_BALL, defaults.darkBall());
         this.dataTracker.startTracking(TILTED_HALO, defaults.tiltedHalo());
+        this.dataTracker.startTracking(VISUAL_LAB_ANIMATION, -1);
+        this.dataTracker.startTracking(VISUAL_LAB_ANIMATION_PHASE, 0);
+    }
+
+    /** Development-only animation used by Visual Lab stress matrices. */
+    public int getVisualLabAnimation() {
+        return this.dataTracker.get(VISUAL_LAB_ANIMATION);
+    }
+
+    public int getVisualLabAnimationPhase() {
+        return this.dataTracker.get(VISUAL_LAB_ANIMATION_PHASE);
+    }
+
+    public void setVisualLabAnimation(int clipIndex, int phase) {
+        this.dataTracker.set(VISUAL_LAB_ANIMATION, clipIndex);
+        this.dataTracker.set(VISUAL_LAB_ANIMATION_PHASE, Math.max(0, phase));
     }
 
     public ChaoAppearanceState getAppearanceState() {

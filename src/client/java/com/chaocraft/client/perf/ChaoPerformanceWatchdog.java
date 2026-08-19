@@ -4,6 +4,8 @@ import com.chaocraft.ChaoCraft;
 import com.chaocraft.client.render.debug.ChaoRenderMetrics;
 import net.minecraft.client.MinecraftClient;
 
+import java.lang.management.BufferPoolMXBean;
+import java.lang.management.ManagementFactory;
 import java.util.EnumMap;
 import java.util.Locale;
 import java.util.Map;
@@ -32,6 +34,8 @@ public final class ChaoPerformanceWatchdog {
     private static final Map<Category, Long> lastWarnings = new EnumMap<>(Category.class);
     private static long lastSampleNanos = Long.MIN_VALUE;
     private static ChaoRenderMetrics.Snapshot previous;
+    private static final BufferPoolMXBean DIRECT_BUFFER_POOL = ManagementFactory.getPlatformMXBeans(BufferPoolMXBean.class)
+            .stream().filter(pool -> "direct".equalsIgnoreCase(pool.getName())).findFirst().orElse(null);
 
     private ChaoPerformanceWatchdog() {
     }
@@ -49,6 +53,7 @@ public final class ChaoPerformanceWatchdog {
         checkHeap(now);
         checkFps(client, current, now);
         checkRenderCpu(current, now);
+        emitAuditSample(client, current);
         previous = current;
     }
 
@@ -122,6 +127,70 @@ public final class ChaoPerformanceWatchdog {
                     "Chao renderer CPU spike: %.1f us/call across %d render calls in the last sample",
                     microsPerCall, rendered);
         }
+    }
+
+
+    /**
+     * CP12J.2 diagnostic sampler. It is intentionally arithmetic-only and runs once
+     * per second. Hot draw paths merely increment primitive counters, so the audit
+     * does not introduce per-batch allocations or logging.
+     */
+    private static void emitAuditSample(MinecraftClient client, ChaoRenderMetrics.Snapshot current) {
+        if (previous == null || client.world == null) {
+            return;
+        }
+
+        long rendered = current.totalRenderedChao() - previous.totalRenderedChao();
+        long draws = current.totalGpuBatchDraws() - previous.totalGpuBatchDraws();
+        long skinnedDraws = current.totalSkinnedBatchDraws() - previous.totalSkinnedBatchDraws();
+        long reflectedDraws = current.totalReflectionBatchDraws() - previous.totalReflectionBatchDraws();
+        long paletteUploads = current.totalSkinPaletteUploads() - previous.totalSkinPaletteUploads();
+        long builds = current.totalBuilds() - previous.totalBuilds();
+        long uploadedBytes = current.totalBytesUploaded() - previous.totalBytesUploaded();
+        long hits = current.cacheHits() - previous.cacheHits();
+        long misses = current.cacheMisses() - previous.cacheMisses();
+        long faceChanges = current.totalPreviewFaceChanges() - previous.totalPreviewFaceChanges();
+
+        // Stay silent during ordinary gameplay. 50/100-Chao matrices easily exceed
+        // this threshold, while Face tab interaction explicitly opts into sampling.
+        if (faceChanges <= 0L && rendered < 100L) {
+            return;
+        }
+
+        int fps = Math.max(1, client.getCurrentFps());
+        double visibleChaoPerFrame = rendered / (double) fps;
+        double drawsPerFrame = draws / (double) fps;
+        double drawsPerChao = rendered > 0L ? draws / (double) rendered : 0.0D;
+        double palettesPerChao = rendered > 0L ? paletteUploads / (double) rendered : 0.0D;
+        long cacheLookups = hits + misses;
+        double hitRate = cacheLookups > 0L ? hits * 100.0D / cacheLookups : 100.0D;
+        long directBytes = DIRECT_BUFFER_POOL == null ? -1L : DIRECT_BUFFER_POOL.getMemoryUsed();
+
+        ChaoCraft.LOGGER.warn(
+                "[Performance][Audit] fps={} visible~{}/frame draws={}/frame ({}/Chao) "
+                        + "skinned={} reflected={} palettes={}/Chao cacheHit={}% "
+                        + "builds={} uploaded={}MiB shared={} bindings={} gpuCache={}MiB direct={}MiB",
+                fps, format1(visibleChaoPerFrame), format1(drawsPerFrame), format1(drawsPerChao),
+                skinnedDraws, reflectedDraws, format2(palettesPerChao), format1(hitRate),
+                builds, format1(mib(uploadedBytes)), current.sharedEntries(), current.cachedEntities(),
+                format1(mib(current.cachedEstimatedBytes())),
+                directBytes < 0L ? "n/a" : format1(mib(directBytes)));
+
+        if (faceChanges > 0L) {
+            ChaoCraft.LOGGER.warn(
+                    "[Performance][FaceAudit] changes={} builds={} misses={} hits={} uploaded={}MiB "
+                            + "shared={} gpuCache={}MiB",
+                    faceChanges, builds, misses, hits, format1(mib(uploadedBytes)),
+                    current.sharedEntries(), format1(mib(current.cachedEstimatedBytes())));
+        }
+    }
+
+    private static String format1(double value) {
+        return String.format(Locale.ROOT, "%.1f", value);
+    }
+
+    private static String format2(double value) {
+        return String.format(Locale.ROOT, "%.2f", value);
     }
 
     private static void warn(Category category, long now, String format, Object... args) {

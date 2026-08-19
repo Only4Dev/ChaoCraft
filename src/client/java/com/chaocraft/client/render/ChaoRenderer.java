@@ -4,7 +4,10 @@ import com.chaocraft.ChaoCraft;
 import com.chaocraft.client.render.cache.ChaoGpuRenderCache;
 import com.chaocraft.client.animation.ChaoAnimationClip;
 import com.chaocraft.client.animation.ChaoAnimationPose;
+import com.chaocraft.client.animation.ChaoAnimationRepository;
 import com.chaocraft.client.animation.ChaoSa2RigNodeRegistry;
+import com.chaocraft.client.animation.ChaoSa2BindProfile;
+import com.chaocraft.client.animation.ChaoSa2BindProfileRegistry;
 import com.chaocraft.client.render.cache.ChaoGpuMemoryException;
 import com.chaocraft.client.render.cache.ChaoRenderCache;
 import com.chaocraft.client.render.cache.ChaoRenderStateQuantizer;
@@ -102,6 +105,7 @@ public final class ChaoRenderer extends EntityRenderer<ChaoEntity> {
     // OpenGL receives the final visual state instead of dozens of transient VBO uploads.
     private static final long PREVIEW_BUILD_DEBOUNCE_NANOS = 120_000_000L;
     private static final Identifier CHILD_MODEL = ChaoCraft.id("models/chao/child.cmesh");
+    private static final String NEUTRAL_NORMAL_BIND_PROFILE = "al_nnn";
     private static final Identifier NEUTRAL_NORMAL_MODEL = ChaoCraft.id("models/chao/neutral_normal.cmesh");
     private static final Identifier HERO_NORMAL_MODEL = ChaoCraft.id("models/chao/hero_normal.cmesh");
     private static final Identifier DARK_NORMAL_MODEL = ChaoCraft.id("models/chao/dark_normal.cmesh");
@@ -183,19 +187,19 @@ public final class ChaoRenderer extends EntityRenderer<ChaoEntity> {
     private static final Identifier DARK_WINGS_EXTRA_MASK = ChaoCraft.id("textures/entity/chao/material/dn_wings2.png");
     private static final float MODEL_SCALE = 0.18F;
 
-    private static final int CHILD_ATTACHMENT_NODE_BASE = 64;
+    private static final int ATTACHMENT_NODE_BASE = 64;
 
-    private static int childAttachmentRigNode(int sa2Node) {
-        return CHILD_ATTACHMENT_NODE_BASE + sa2Node;
+    private static int attachmentRigNode(int sa2Node) {
+        return ATTACHMENT_NODE_BASE + sa2Node;
     }
 
-    private static boolean isChildAttachmentRigNode(int rigNode) {
-        return rigNode >= CHILD_ATTACHMENT_NODE_BASE
-                && rigNode < CHILD_ATTACHMENT_NODE_BASE + ChaoAnimationPose.NODE_COUNT;
+    private static boolean isAttachmentRigNode(int rigNode) {
+        return rigNode >= ATTACHMENT_NODE_BASE
+                && rigNode < ATTACHMENT_NODE_BASE + ChaoAnimationPose.NODE_COUNT;
     }
 
-    private static int decodeChildAttachmentRigNode(int rigNode) {
-        return rigNode - CHILD_ATTACHMENT_NODE_BASE;
+    private static int decodeAttachmentRigNode(int rigNode) {
+        return rigNode - ATTACHMENT_NODE_BASE;
     }
 
     private final ChaoRenderCache morphCache = new ChaoRenderCache();
@@ -248,6 +252,7 @@ public final class ChaoRenderer extends EntityRenderer<ChaoEntity> {
     // F8 records the latest requested state and only uploads once the slider
     // has been stable briefly. The previous VBO remains visible during scrubbing.
     private final Map<UUID, PreviewGpuState> previewGpuStates = new HashMap<>();
+    private long lastNeutralAdultSkinDiagnosticNanos;
 
     private ChaoMeshModel childModel;
     private ChaoMeshModel neutralNormalModel;
@@ -431,9 +436,16 @@ public final class ChaoRenderer extends EntityRenderer<ChaoEntity> {
         int animalPartKeys = 0;
         int baseModels = 0;
         int paletteProfiles = 0;
+        int bindProfiles = 0;
+        int warmBodyProfiles = 0;
+        long warmBodyBytes = 0L;
         long attachmentBytes = 0L;
 
         try {
+            // Finite immutable CPU rig data. Parse once per Minecraft process;
+            // every later Chao/model shares these precomputed bind/inverse-bind matrices.
+            bindProfiles = ChaoSa2BindProfileRegistry.preload();
+
             // Base model references. ChaoMeshRepository already preloaded the
             // underlying CPU arrays; this binds them into renderer-local lookup
             // maps before gameplay needs them.
@@ -486,6 +498,35 @@ public final class ChaoRenderer extends EntityRenderer<ChaoEntity> {
                 }
             }
 
+            /*
+             * Pre-upload the 21 canonical no-accessory bodies (7 visual types x
+             * Neutral/Hero/Dark alignment). The production cache ignores baked
+             * light when ChaoCraft owns the shader, so these VBOs are immediately
+             * reusable on first world entry. We intentionally do NOT expand this
+             * across colors/parts/reflections; that combinatorial space remains
+             * demand-built and bounded by the shared cache budget.
+             */
+            if (!ChaoShaderPackCompat.isShaderPackInUse()) {
+                for (ChaoVisualType visualType : ChaoVisualType.values()) {
+                    for (float alignment : baseAlignments) {
+                        ChaoAppearanceState warmState = canonicalizeBodyCacheState(
+                                ChaoAppearanceState.DEFAULT
+                                        .withType(visualType)
+                                        .withAge(visualType == ChaoVisualType.CHILD ? 0.0F : 1.0F)
+                                        .withAlignment(alignment));
+                        ChaoMeshModel warmModel = getModel(warmState);
+                        if (warmModel == null) continue;
+                        ChaoGpuRenderCache.Entry warmed = gpuCache.prewarm(
+                                warmState, warmModel, 0, 0L, 0,
+                                () -> buildWarmGpuBatches(warmState, warmModel, 0x00F000F0));
+                        if (warmed != null) {
+                            warmBodyProfiles++;
+                            warmBodyBytes += warmed.estimatedBytes();
+                        }
+                    }
+                }
+            }
+
             for (ChaoHeadDecoType type : ChaoHeadDecoType.values()) {
                 if (type == ChaoHeadDecoType.NONE) continue;
                 List<ChaoGpuRenderCache.DrawBatch> batches =
@@ -519,11 +560,14 @@ public final class ChaoRenderer extends EntityRenderer<ChaoEntity> {
             sharedGpuWarmupComplete = true;
             double elapsedMs = (System.nanoTime() - started) / 1_000_000.0;
             ChaoCraft.LOGGER.info(
-                    "[Performance] Shared GPU warmup complete: {} base model refs, "
-                            + "{} palette profiles, {} HeadDeco types, {} AnimalPart keys, "
-                            + "{} KiB shared VBOs in {} ms",
+                    "[Performance] Shared GPU warmup complete: {} SA2 bind profiles, "
+                            + "{} base model refs, {} palette profiles, {} canonical body VBOs ({} KiB), "
+                            + "{} HeadDeco types, {} AnimalPart keys, {} KiB attachment VBOs in {} ms",
+                    bindProfiles,
                     baseModels,
                     paletteProfiles,
+                    warmBodyProfiles,
+                    (warmBodyBytes + 1023L) / 1024L,
                     headDecoTypes,
                     animalPartKeys,
                     (attachmentBytes + 1023L) / 1024L,
@@ -564,8 +608,13 @@ public final class ChaoRenderer extends EntityRenderer<ChaoEntity> {
             VertexConsumerProvider vertexConsumers, int light) {
         long renderStarted = System.nanoTime();
         ChaoAppearanceState state = ChaoRenderStateQuantizer.quantize(entity.getAppearanceState());
+        ChaoAnimationClip worldAnimation = resolveVisualLabStressAnimation(entity);
+        ChaoAnimationPose worldPose = worldAnimation == null
+                ? null
+                : resolvePreviewAnimationPose(
+                        state, worldAnimation, visualLabStressFrame(entity, worldAnimation, tickDelta));
         try {
-            ChaoGpuRenderCache.Entry gpuEntry = prepareGpuEntry(entity, state, light);
+            ChaoGpuRenderCache.Entry gpuEntry = prepareGpuEntry(entity, state, light, worldPose != null);
             if (gpuEntry == null) {
                 // A crowded scene may defer a first-time VBO build for a few
                 // frames. Rendering a slime fallback made normal cache warm-up
@@ -582,11 +631,14 @@ public final class ChaoRenderer extends EntityRenderer<ChaoEntity> {
             Matrix3f parentNormal = new Matrix3f(matrices.peek().getNormalMatrix());
             matrices.multiply(RotationAxis.POSITIVE_Y.rotationDegrees(180.0F - yaw));
             matrices.scale(MODEL_SCALE, MODEL_SCALE, MODEL_SCALE);
+            Matrix4f[] worldRenderPalette = worldPose == null
+                    ? null
+                    : createRenderSpaceSkinPalette(worldPose, state.type());
             drawGpuBatches(
-                    gpuEntry, matrices, parentNormal, light, false, null,
-                    state.reflectionType());
-            drawAnimalParts(state, matrices, parentNormal, light, false, null);
-            drawHeadDeco(state, matrices, parentNormal, light, false, null);
+                    gpuEntry, matrices, parentNormal, light, false, worldPose,
+                    state.reflectionType(), state.type(), worldRenderPalette);
+            drawAnimalParts(state, matrices, parentNormal, light, false, worldPose, worldRenderPalette);
+            drawHeadDeco(state, matrices, parentNormal, light, false, worldPose, worldRenderPalette);
             matrices.pop();
 
             super.render(entity, yaw, tickDelta, matrices, vertexConsumers, light);
@@ -618,11 +670,11 @@ public final class ChaoRenderer extends EntityRenderer<ChaoEntity> {
             return;
         }
 
-        // Animation is pure draw-time state. Child uses native GPU skinning;
-        // non-Child clips retain the older rigid-node diagnostic path for now.
-        ChaoAnimationPose drawPose = animation == null
-                ? null
-                : ChaoAnimationPose.sample(animation, animationFrame, state.type().isChild());
+        // Animation is pure draw-time state. Child remains on the already-approved
+        // GPU skinning path. CP12I.2C evaluates Neutral Normal against al_nnn and
+        // applies those deltas to rigid SA2-node batches; every other Adult/Chaos
+        // remains outside this checkpoint.
+        ChaoAnimationPose drawPose = resolvePreviewAnimationPose(state, animation, animationFrame);
 
         // DrawContext contains only the screen-local transform. Minecraft's GUI
         // projection also relies on RenderSystem's global model-view stack.
@@ -650,20 +702,19 @@ public final class ChaoRenderer extends EntityRenderer<ChaoEntity> {
          */
         matrices.scale(-MODEL_SCALE, MODEL_SCALE, MODEL_SCALE);
 
+        Matrix4f[] previewRenderPalette = drawPose == null
+                ? null
+                : createRenderSpaceSkinPalette(drawPose, state.type());
         drawGpuBatches(
                 gpuEntry, matrices, parentNormal, 0x00F000F0, true, drawPose,
-                state.reflectionType());
+                state.reflectionType(), state.type(), previewRenderPalette);
         drawAnimalParts(
-                state, matrices, parentNormal, 0x00F000F0, true, drawPose);
-        drawHeadDeco(state, matrices, parentNormal, 0x00F000F0, true, drawPose);
+                state, matrices, parentNormal, 0x00F000F0, true, drawPose, previewRenderPalette);
+        drawHeadDeco(state, matrices, parentNormal, 0x00F000F0, true, drawPose, previewRenderPalette);
         matrices.pop();
     }
 
-    /**
-     * Builds at most one transient CPU-skinned Child frame for the F8 Animation
-     * Lab. Frame/clip are deliberately NOT inserted into any shared VisualKey.
-     * The previous diagnostic VBO is closed immediately when the frame changes.
-     */
+
     /**
      * HeadDeco mesh identity is not body geometry identity.
      *
@@ -712,6 +763,7 @@ public final class ChaoRenderer extends EntityRenderer<ChaoEntity> {
             case NONE, BRIGHT, SHINY, TT_METAL -> false;
         };
     }
+
 
     private ChaoGpuRenderCache.Entry preparePreviewGpuEntry(
             ChaoEntity entity, ChaoAppearanceState state) {
@@ -771,6 +823,11 @@ public final class ChaoRenderer extends EntityRenderer<ChaoEntity> {
     }
 
     private ChaoGpuRenderCache.Entry prepareGpuEntry(ChaoEntity entity, ChaoAppearanceState state, int light) {
+        return prepareGpuEntry(entity, state, light, false);
+    }
+
+    private ChaoGpuRenderCache.Entry prepareGpuEntry(ChaoEntity entity, ChaoAppearanceState state,
+            int light, boolean riggedWorldQa) {
         ChaoAppearanceState cacheState = canonicalizeBodyCacheState(state);
         ChaoMeshModel model = getModel(cacheState);
         if (model == null) {
@@ -782,13 +839,15 @@ public final class ChaoRenderer extends EntityRenderer<ChaoEntity> {
         // Geometry/appearance is cacheable; Minecraft lighting, exact HeadDeco
         // mesh identity and animation pose are draw-time/shared attachment state.
         int cacheLight = ChaoShaderPackCompat.isShaderPackInUse() ? light : 0;
+        int layoutVariant = riggedWorldQa ? 1 : 0;
         return gpuCache.get(
                 entity,
                 cacheState,
                 model,
                 cacheLight,
                 worldTick,
-                () -> buildTransientGpuBatches(entity, cacheState, model, light, false)
+                layoutVariant,
+                () -> buildTransientGpuBatches(entity, cacheState, model, light, riggedWorldQa)
         );
     }
 
@@ -812,6 +871,17 @@ public final class ChaoRenderer extends EntityRenderer<ChaoEntity> {
             // The uploaded immutable VBO is now the persistent representation.
             morphCache.remove(entity.getUuid());
         }
+    }
+
+    /** Startup-only body build that avoids creating/binding a synthetic entity. */
+    private List<ChaoGpuRenderCache.DrawBatch> buildWarmGpuBatches(
+            ChaoAppearanceState state, ChaoMeshModel model, int light) {
+        ChaoMorphWeights weights = ChaoMorphResolver.resolve(state);
+        float[] morphWeights = buildMorphWeights(model, state.type(), weights);
+        ChaoPaletteState palette = resolvePaletteRuntime(state, weights);
+        ChaoRenderCache.Entry prepared = ChaoRenderCache.prepare(
+                state, model, morphWeights, palette);
+        return buildGpuBatches(model, prepared, state, palette, light, false, null);
     }
 
     /**
@@ -948,7 +1018,22 @@ public final class ChaoRenderer extends EntityRenderer<ChaoEntity> {
         // Animation Lab preview expands those groups into rigid SA2 nodes for
         // CP12B validation; this avoids increasing world draw calls before the
         // final GPU node-palette vertex format lands.
-        if (riggedPreview && cpuPose == null && type != ChaoVisualType.CHILD) {
+        if (riggedPreview
+                && type != ChaoVisualType.CHILD
+                && isNeutralNormalAdultSkinningTarget(state)) {
+            /*
+             * CP12I.2C: Neutral Normal currently has no retained smooth-skin
+             * metadata (the CP12I.2B probe measured 0/643 weighted vertices).
+             * Preserve the already-cached geometry and recover SA2 node ownership
+             * at batch granularity instead: each rigid batch carries its node id and
+             * receives al_nnn's bind-relative delta at draw time. No frame data enters
+             * VisualKey/VBO identity and no geometry is rebuilt while the clip plays.
+             */
+            grouped = splitNeutralNormalRigGroups(grouped);
+        } else if (riggedPreview && cpuPose == null
+                && type != ChaoVisualType.CHILD) {
+            // Keep the pre-CP12I diagnostic/static preview behavior for every other
+            // Adult/Chaos until its own checkpoint.
             grouped = splitRigGroups(grouped);
         }
 
@@ -971,7 +1056,14 @@ public final class ChaoRenderer extends EntityRenderer<ChaoEntity> {
                 // compatible sources into ~2 MiB upload chunks. Total geometry is
                 // unchanged, but no routine Chao build needs one giant contiguous
                 // native allocation.
-                for (List<DrawSource> chunk : partitionSources(group.getValue(), layer)) {
+                //
+                // CP12I.2 Neutral Adult must also keep skinned and static sources
+                // in separate upload groups. Adult material batching can legitimately
+                // merge both kinds under one BatchKey; using allMatch(hasSkin) on that
+                // mixed chunk silently downgraded the whole batch to static vertices.
+                List<List<DrawSource>> skinCompatibleGroups = List.of(group.getValue());
+                for (List<DrawSource> compatibleSources : skinCompatibleGroups) {
+                    for (List<DrawSource> chunk : partitionSources(compatibleSources, layer)) {
                     int expectedVertices = estimatedVertexCount(chunk);
                     int bufferBytes;
                     boolean gpuSkinned = riggedPreview
@@ -1021,6 +1113,7 @@ public final class ChaoRenderer extends EntityRenderer<ChaoEntity> {
                             key.rigNode(),
                             gpuSkinned
                     ));
+                    }
                 }
             }
 
@@ -1438,6 +1531,56 @@ public final class ChaoRenderer extends EntityRenderer<ChaoEntity> {
         return result;
     }
 
+    /**
+     * Exact visible-node ownership for the isolated Neutral Normal Adult control.
+     *
+     * <p>The Adult .cmesh keeps SA2's semantic part/material separation but no
+     * smooth skin weights. Neutral Normal can therefore use the same universal
+     * 0..39 rig contract as Child: torso/tail and paired limbs are rigid node
+     * owners, while the Head material slots preserve eye/eyelid/mouth ownership.
+     * Geometry stays in immutable shared VBOs; only the node delta changes at
+     * draw time.</p>
+     */
+    private static Map<BatchKey, List<DrawSource>> splitNeutralNormalRigGroups(
+            Map<BatchKey, List<DrawSource>> grouped) {
+        Map<BatchKey, List<DrawSource>> result = new LinkedHashMap<>();
+        for (Map.Entry<BatchKey, List<DrawSource>> entry : grouped.entrySet()) {
+            BatchKey base = entry.getKey();
+            for (DrawSource source : entry.getValue()) {
+                String name = source.segment().name().toLowerCase(java.util.Locale.ROOT);
+                if (name.contains("arms")) {
+                    addRigSplit(result, base, source, 3, RigSide.POSITIVE_X);
+                    addRigSplit(result, base, source, 10, RigSide.NEGATIVE_X);
+                } else if (name.contains("legs")) {
+                    addRigSplit(result, base, source, 6, RigSide.POSITIVE_X);
+                    addRigSplit(result, base, source, 13, RigSide.NEGATIVE_X);
+                } else if (name.contains("wings")) {
+                    addRigSplit(result, base, source, 37, RigSide.POSITIVE_X);
+                    addRigSplit(result, base, source, 39, RigSide.NEGATIVE_X);
+                } else if (name.contains("tail")) {
+                    addRigSplit(result, base, source, 8, RigSide.ALL);
+                } else if (name.contains("head")) {
+                    int submeshIndex = source.segment().submeshes().indexOf(source.submesh());
+                    switch (submeshIndex) {
+                        case 1 -> {
+                            addRigSplit(result, base, source, 18, RigSide.POSITIVE_X);
+                            addRigSplit(result, base, source, 21, RigSide.NEGATIVE_X);
+                        }
+                        case 2 -> {
+                            addRigSplit(result, base, source, 19, RigSide.POSITIVE_X);
+                            addRigSplit(result, base, source, 22, RigSide.NEGATIVE_X);
+                        }
+                        case 3, 4 -> addRigSplit(result, base, source, 27, RigSide.ALL);
+                        default -> addRigSplit(result, base, source, 16, RigSide.ALL);
+                    }
+                } else {
+                    addRigSplit(result, base, source, 1, RigSide.ALL);
+                }
+            }
+        }
+        return result;
+    }
+
     private static void addRigSplit(Map<BatchKey, List<DrawSource>> grouped,
             BatchKey base, DrawSource source, int rigNode, RigSide side) {
         BatchKey key = new BatchKey(
@@ -1445,6 +1588,17 @@ public final class ChaoRenderer extends EntityRenderer<ChaoEntity> {
                 base.fullbright(), base.reflectionEmission(), rigNode);
         grouped.computeIfAbsent(key, ignored -> new ArrayList<>())
                 .add(new DrawSource(source.segment(), source.prepared(), source.submesh(), side));
+    }
+
+    private static List<List<DrawSource>> splitBySkinCapability(List<DrawSource> sources) {
+        List<DrawSource> skinned = new ArrayList<>();
+        List<DrawSource> staticSources = new ArrayList<>();
+        for (DrawSource source : sources) {
+            (source.segment().hasSkin() ? skinned : staticSources).add(source);
+        }
+        if (skinned.isEmpty()) return List.of(List.copyOf(staticSources));
+        if (staticSources.isEmpty()) return List.of(List.copyOf(skinned));
+        return List.of(List.copyOf(skinned), List.copyOf(staticSources));
     }
 
     private static List<List<DrawSource>> partitionSources(List<DrawSource> sources, RenderLayer layer) {
@@ -1535,6 +1689,12 @@ public final class ChaoRenderer extends EntityRenderer<ChaoEntity> {
      */
     private static void uploadVertexBufferChecked(
             VertexBuffer vertexBuffer, BufferBuilder.BuiltBuffer built) {
+        /*
+         * Minecraft 1.20.1 VertexBuffer.upload(BuiltBuffer) takes ownership of the
+         * BuiltBuffer upload payload and releases it as part of the upload path.
+         * Do not release it again here: doing so double-releases the native buffer
+         * and crashes the renderer with "Buffer has already been released!".
+         */
         vertexBuffer.upload(built);
         int error = GL11.glGetError();
         if (error == GL11.GL_OUT_OF_MEMORY) {
@@ -1718,6 +1878,49 @@ public final class ChaoRenderer extends EntityRenderer<ChaoEntity> {
         }
     }
 
+    /** Resolves only the explicit Visual Lab stress animation. Normal gameplay Chao return null. */
+    private static ChaoAnimationClip resolveVisualLabStressAnimation(ChaoEntity entity) {
+        int requested = entity.getVisualLabAnimation();
+        List<ChaoAnimationClip> clips = ChaoAnimationRepository.clips();
+        if (requested < 0 || clips.isEmpty()) return null;
+        return clips.get(Math.floorMod(requested, clips.size()));
+    }
+
+    private static double visualLabStressFrame(ChaoEntity entity, ChaoAnimationClip clip, float tickDelta) {
+        if (clip.frames() <= 0) return 0.0D;
+        double timeline = (entity.age + tickDelta) * 1.5D + entity.getVisualLabAnimationPhase();
+        return timeline % clip.frames();
+    }
+
+    private static ChaoAnimationPose resolvePreviewAnimationPose(
+            ChaoAppearanceState state, ChaoAnimationClip animation, double animationFrame) {
+        if (animation == null) {
+            return null;
+        }
+        if (state.type().isChild()) {
+            // Safety control: CP12I.2 must not alter the validated Child path.
+            return ChaoAnimationPose.sample(animation, animationFrame, true);
+        }
+        if (isNeutralNormalAdultSkinningTarget(state)) {
+            Optional<ChaoSa2BindProfile> profile =
+                    ChaoSa2BindProfileRegistry.find(NEUTRAL_NORMAL_BIND_PROFILE);
+            if (profile.isPresent()) {
+                return ChaoAnimationPose.sample(animation, animationFrame, profile.get(), false);
+            }
+        }
+        return ChaoAnimationPose.sample(animation, animationFrame, false);
+    }
+
+    /**
+     * Neutral Normal is the isolated Adult control case for proving that the
+     * universal 40-node animation can be evaluated against a non-Child bind
+     * profile without changing production cache identity or Child skinning.
+     */
+    private static boolean isNeutralNormalAdultSkinningTarget(ChaoAppearanceState state) {
+        return state.type() == ChaoVisualType.NORMAL
+                && resolveAdultNormalVariant(state) == AdultNormalVariant.NEUTRAL;
+    }
+
     /**
      * Convert Viewer-space SA2 deltas into the ACTUAL coordinate space occupied
      * by prepared/cached Child vertices.
@@ -1737,11 +1940,19 @@ public final class ChaoRenderer extends EntityRenderer<ChaoEntity> {
      * al_ncn golden reference and reduced total Sprint error from ~1.10-1.53 RMS
      * to ~7e-6-1.1e-5 RMS across all six Child segments.</p>
      */
+    private static final Matrix4f VIEWER_TO_RENDER_CHILD = new Matrix4f()
+            .identity().rotateX((float) Math.toRadians(90.0F)).scale(1.0F, 1.0F, -1.0F);
+    private static final Matrix4f RENDER_TO_VIEWER_CHILD = new Matrix4f(VIEWER_TO_RENDER_CHILD).invert();
+    private static final Matrix4f VIEWER_TO_RENDER_ADULT = new Matrix4f()
+            .identity().scale(1.0F, 1.0F, -1.0F);
+    private static final Matrix4f RENDER_TO_VIEWER_ADULT = new Matrix4f(VIEWER_TO_RENDER_ADULT).invert();
+
     private static Matrix4f[] createRenderSpaceSkinPalette(
             ChaoAnimationPose pose, ChaoVisualType type) {
-        Matrix4f handedness = new Matrix4f().identity().scale(1.0F, 1.0F, -1.0F);
-        Matrix4f viewerToRender = createLocalPositionMatrix(type).mul(handedness);
-        Matrix4f renderToViewer = new Matrix4f(viewerToRender).invert();
+        Matrix4f viewerToRender = type == ChaoVisualType.CHILD
+                ? VIEWER_TO_RENDER_CHILD : VIEWER_TO_RENDER_ADULT;
+        Matrix4f renderToViewer = type == ChaoVisualType.CHILD
+                ? RENDER_TO_VIEWER_CHILD : RENDER_TO_VIEWER_ADULT;
         Matrix4f[] palette = new Matrix4f[ChaoAnimationPose.NODE_COUNT];
 
         for (int node = 0; node < palette.length; node++) {
@@ -1753,17 +1964,15 @@ public final class ChaoRenderer extends EntityRenderer<ChaoEntity> {
     }
 
     /**
-     * Converts one Child helper/attachment delta into the exact prepared-VBO
-     * coordinate space. This is the same Mtotal = RotateX(+90) * FlipZ basis
-     * change used by native body skinning, but without allocating a 40-matrix
-     * palette for a single attachment.
+     * Convert one rigid SA2 node delta from Viewer coordinates into the prepared
+     * VBO coordinate space used by the selected Chao family.
      */
-    private static Matrix4f createChildAttachmentRenderDelta(
-            ChaoAnimationPose pose, int nodeIndex) {
-        Matrix4f handedness = new Matrix4f().identity().scale(1.0F, 1.0F, -1.0F);
-        Matrix4f viewerToRender = createLocalPositionMatrix(ChaoVisualType.CHILD)
-                .mul(handedness);
-        Matrix4f renderToViewer = new Matrix4f(viewerToRender).invert();
+    private static Matrix4f createRigidRenderDelta(
+            ChaoAnimationPose pose, int nodeIndex, ChaoVisualType visualType) {
+        Matrix4f viewerToRender = visualType == ChaoVisualType.CHILD
+                ? VIEWER_TO_RENDER_CHILD : VIEWER_TO_RENDER_ADULT;
+        Matrix4f renderToViewer = visualType == ChaoVisualType.CHILD
+                ? RENDER_TO_VIEWER_CHILD : RENDER_TO_VIEWER_ADULT;
         return new Matrix4f(viewerToRender)
                 .mul(pose.delta(nodeIndex))
                 .mul(renderToViewer);
@@ -1815,22 +2024,16 @@ public final class ChaoRenderer extends EntityRenderer<ChaoEntity> {
      * <p>Prepared Child vertices already include FlipZ and the renderer's fixed
      * +90 X rotation, so the exact basis change is Mtotal = R * FlipZ.</p>
      */
-    private static void uploadSkinningUniforms(ShaderProgram shader, ChaoAnimationPose pose) {
-        GlUniform enabled = shader.getUniform("SkinningEnabled");
-        if (enabled != null) {
-            enabled.set(pose == null ? 0.0F : 1.0F);
-        }
+    private static final Matrix4f IDENTITY_BONE_MATRIX = new Matrix4f().identity();
 
-        Matrix4f[] palette = pose == null
-                ? null
-                : createRenderSpaceSkinPalette(pose, ChaoVisualType.CHILD);
+    private static void uploadSkinningUniforms(ShaderProgram shader, Matrix4f[] palette) {
+        ChaoRenderMetrics.onSkinPaletteUpload();
+        GlUniform enabled = shader.getUniform("SkinningEnabled");
+        if (enabled != null) enabled.set(palette == null ? 0.0F : 1.0F);
 
         for (int node = 0; node < ChaoAnimationPose.NODE_COUNT; node++) {
             GlUniform uniform = shader.getUniform("Bone" + node);
-            if (uniform == null) {
-                continue;
-            }
-            uniform.set(palette == null ? new Matrix4f().identity() : palette[node]);
+            if (uniform != null) uniform.set(palette == null ? IDENTITY_BONE_MATRIX : palette[node]);
         }
     }
 
@@ -1839,7 +2042,31 @@ public final class ChaoRenderer extends EntityRenderer<ChaoEntity> {
             boolean legacyPreview, ChaoAnimationPose pose) {
         drawGpuBatchesInternal(
                 batches, matrices, restoreNormalMatrix, packedLight,
-                legacyPreview, pose, ChaoReflectionType.NONE);
+                legacyPreview, pose, ChaoReflectionType.NONE, ChaoVisualType.CHILD, null);
+    }
+
+    /**
+     * Draws an already-resolved shared batch list with the active Chao body basis.
+     * Shared attachment caches are independent from the owning Chao, so callers
+     * provide reflection and visual type only at draw time.
+     */
+    private static void drawGpuBatches(List<ChaoGpuRenderCache.DrawBatch> batches,
+            MatrixStack matrices, Matrix3f restoreNormalMatrix, int packedLight,
+            boolean legacyPreview, ChaoAnimationPose pose,
+            ChaoReflectionType reflectionOverride, ChaoVisualType skinningVisualType) {
+        drawGpuBatchesInternal(
+                batches, matrices, restoreNormalMatrix, packedLight,
+                legacyPreview, pose, reflectionOverride, skinningVisualType, null);
+    }
+
+    private static void drawGpuBatches(List<ChaoGpuRenderCache.DrawBatch> batches,
+            MatrixStack matrices, Matrix3f restoreNormalMatrix, int packedLight,
+            boolean legacyPreview, ChaoAnimationPose pose,
+            ChaoReflectionType reflectionOverride, ChaoVisualType skinningVisualType,
+            Matrix4f[] renderSpacePalette) {
+        drawGpuBatchesInternal(
+                batches, matrices, restoreNormalMatrix, packedLight,
+                legacyPreview, pose, reflectionOverride, skinningVisualType, renderSpacePalette);
     }
 
     private static void drawGpuBatches(ChaoGpuRenderCache.Entry entry, MatrixStack matrices,
@@ -1853,18 +2080,39 @@ public final class ChaoRenderer extends EntityRenderer<ChaoEntity> {
     private static void drawGpuBatches(ChaoGpuRenderCache.Entry entry, MatrixStack matrices,
             Matrix3f restoreNormalMatrix, int packedLight, boolean legacyPreview,
             ChaoAnimationPose pose, ChaoReflectionType reflectionOverride) {
+        drawGpuBatches(entry, matrices, restoreNormalMatrix, packedLight, legacyPreview,
+                pose, reflectionOverride, ChaoVisualType.CHILD);
+    }
+
+    private static void drawGpuBatches(ChaoGpuRenderCache.Entry entry, MatrixStack matrices,
+            Matrix3f restoreNormalMatrix, int packedLight, boolean legacyPreview,
+            ChaoAnimationPose pose, ChaoReflectionType reflectionOverride,
+            ChaoVisualType skinningVisualType) {
         if (entry == null || entry.isClosed()) {
             return;
         }
         drawGpuBatchesInternal(
                 entry.batches(), matrices, restoreNormalMatrix, packedLight,
-                legacyPreview, pose, reflectionOverride);
+                legacyPreview, pose, reflectionOverride, skinningVisualType, null);
+    }
+
+    private static void drawGpuBatches(ChaoGpuRenderCache.Entry entry, MatrixStack matrices,
+            Matrix3f restoreNormalMatrix, int packedLight, boolean legacyPreview,
+            ChaoAnimationPose pose, ChaoReflectionType reflectionOverride,
+            ChaoVisualType skinningVisualType, Matrix4f[] renderSpacePalette) {
+        if (entry == null || entry.isClosed()) {
+            return;
+        }
+        drawGpuBatchesInternal(
+                entry.batches(), matrices, restoreNormalMatrix, packedLight,
+                legacyPreview, pose, reflectionOverride, skinningVisualType, renderSpacePalette);
     }
 
     private static void drawGpuBatchesInternal(List<ChaoGpuRenderCache.DrawBatch> batches,
             MatrixStack matrices, Matrix3f restoreNormalMatrix, int packedLight,
             boolean legacyPreview, ChaoAnimationPose pose,
-            ChaoReflectionType reflectionOverride) {
+            ChaoReflectionType reflectionOverride, ChaoVisualType skinningVisualType,
+            Matrix4f[] sharedRenderSpacePalette) {
         RenderSystem.assertOnRenderThread();
         RenderSystem.setShaderColor(1.0F, 1.0F, 1.0F, 1.0F);
         Matrix4f baseModelViewMatrix = matrices.peek().getPositionMatrix();
@@ -1877,6 +2125,21 @@ public final class ChaoRenderer extends EntityRenderer<ChaoEntity> {
         float lightV = (skyLight + 0.5F) / 16.0F;
         boolean shaderPackActive = ChaoShaderPackCompat.isShaderPackInUse();
 
+        // One basis conversion per Chao draw, shared by body, rigid nodes and all
+        // skinning shader batches. Previously this rebuilt/inverted 40 matrices
+        // once per batch, which scaled badly after Adult attachments became animated.
+        Matrix4f[] renderSpacePalette = sharedRenderSpacePalette != null
+                ? sharedRenderSpacePalette
+                : (pose == null ? null : createRenderSpaceSkinPalette(pose, skinningVisualType));
+
+        // Reuse temporary matrices instead of allocating two JOML objects for every
+        // rigid node batch. Shader uniforms copy the values before the next batch.
+        Matrix4f rigidModelViewScratch = new Matrix4f();
+        Matrix3f rigidNormalScratch = new Matrix3f();
+        Matrix3f rigidDeltaNormalScratch = new Matrix3f();
+        boolean regularSkinPaletteUploaded = false;
+        boolean reflectionSkinPaletteUploaded = false;
+
         for (ChaoGpuRenderCache.DrawBatch batch : batches) {
             if (batch.vertexBuffer().isClosed()) {
                 continue;
@@ -1886,18 +2149,21 @@ public final class ChaoRenderer extends EntityRenderer<ChaoEntity> {
             Matrix3f normalMatrix = baseNormalMatrix;
             if (pose != null && batch.rigNode() >= 0) {
                 Matrix4f delta;
-                if (isChildAttachmentRigNode(batch.rigNode())) {
-                    int sa2Node = decodeChildAttachmentRigNode(batch.rigNode());
-                    delta = createChildAttachmentRenderDelta(pose, sa2Node);
+                if (isAttachmentRigNode(batch.rigNode())) {
+                    int sa2Node = decodeAttachmentRigNode(batch.rigNode());
+                    // Emotion, Animal Parts and HeadDeco all use the same universal
+                    // SA2 attachment nodes. Convert the node delta through the
+                    // active body's prepared-VBO basis instead of assuming Child.
+                    delta = renderSpacePalette[sa2Node];
                 } else {
-                    // Legacy non-Child rigid diagnostic path.
-                    delta = pose.delta(batch.rigNode());
+                    // Adult/Chaos rigid nodes use the same SA2 animation channels,
+                    // converted into the prepared VBO basis just like Child.
+                    delta = renderSpacePalette[batch.rigNode()];
                 }
 
-                modelViewMatrix = new Matrix4f(baseModelViewMatrix).mul(delta);
-                Matrix3f deltaNormal = new Matrix3f();
-                delta.get3x3(deltaNormal);
-                normalMatrix = new Matrix3f(baseNormalMatrix).mul(deltaNormal);
+                modelViewMatrix = rigidModelViewScratch.set(baseModelViewMatrix).mul(delta);
+                delta.get3x3(rigidDeltaNormalScratch);
+                normalMatrix = rigidNormalScratch.set(baseNormalMatrix).mul(rigidDeltaNormalScratch);
             }
 
             RenderLayer layer = batch.layer();
@@ -1922,7 +2188,10 @@ public final class ChaoRenderer extends EntityRenderer<ChaoEntity> {
                         shader = ChaoReflectionSkinningShader.get();
                         shader.addSampler("Sampler0", RenderSystem.getShaderTexture(0));
                         shader.addSampler("Sampler2", RenderSystem.getShaderTexture(2));
-                        uploadSkinningUniforms(shader, pose);
+                        if (!reflectionSkinPaletteUploaded) {
+                            uploadSkinningUniforms(shader, renderSpacePalette);
+                            reflectionSkinPaletteUploaded = true;
+                        }
 
                         GlUniform emissionUniform = shader.getUniform("Emission");
                         if (emissionUniform != null) emissionUniform.set(batch.reflectionEmission());
@@ -1942,7 +2211,10 @@ public final class ChaoRenderer extends EntityRenderer<ChaoEntity> {
                         shader.addSampler("Sampler1", RenderSystem.getShaderTexture(1));
                         shader.addSampler("Sampler2", RenderSystem.getShaderTexture(2));
                         RenderSystem.setupShaderLights(shader);
-                        uploadSkinningUniforms(shader, pose);
+                        if (!regularSkinPaletteUploaded) {
+                            uploadSkinningUniforms(shader, renderSpacePalette);
+                            regularSkinPaletteUploaded = true;
+                        }
                     } else if (batch.reflection() && ChaoReflectionShader.isAvailable()) {
                         // Reflection is intentionally shared: its camera-reactive
                         // cubemap behavior is already validated in world and F8.
@@ -1997,6 +2269,7 @@ public final class ChaoRenderer extends EntityRenderer<ChaoEntity> {
                     normalUniform.set(normalMatrix);
                 }
 
+                ChaoRenderMetrics.onGpuBatchDraw(batch.skinned(), batch.reflection());
                 batch.vertexBuffer().bind();
                 try {
                     batch.vertexBuffer().draw(modelViewMatrix, projectionMatrix, shader);
@@ -2086,7 +2359,8 @@ public final class ChaoRenderer extends EntityRenderer<ChaoEntity> {
             Matrix3f restoreNormalMatrix,
             int packedLight,
             boolean legacyPreview,
-            ChaoAnimationPose pose) {
+            ChaoAnimationPose pose,
+            Matrix4f[] renderSpacePalette) {
         if (state.animalParts().isEmpty()) {
             return;
         }
@@ -2124,11 +2398,10 @@ public final class ChaoRenderer extends EntityRenderer<ChaoEntity> {
 
             matrices.push();
             matrices.translate(anchor.x, anchor.y, -anchor.z);
-            ChaoAnimationPose attachmentPose =
-                    state.type() == ChaoVisualType.CHILD ? pose : null;
             drawGpuBatches(
                     batches, matrices, restoreNormalMatrix,
-                    packedLight, legacyPreview, attachmentPose);
+                    packedLight, legacyPreview, pose,
+                    state.reflectionType(), state.type(), renderSpacePalette);
             matrices.pop();
         }
     }
@@ -2166,9 +2439,10 @@ public final class ChaoRenderer extends EntityRenderer<ChaoEntity> {
                 createAnimalPositionMatrix(new Vector3f(), spec);
         Matrix3f normalMatrix = createAnimalNormalMatrix(spec);
 
-        boolean animatedChildAttachment = !adult;
-        ChildAnimalAttachment attachment =
-                animatedChildAttachment ? childAnimalAttachment(slot) : null;
+        // Child and Adult/Chaos share the exact same 0-39 attachment semantics.
+        // The adult flag selects only the Viewer source asset; animation ownership
+        // remains universal and is evaluated draw-time, never baked per frame.
+        ChildAnimalAttachment attachment = childAnimalAttachment(slot);
 
         List<ChaoGpuRenderCache.DrawBatch> result = new ArrayList<>();
         try {
@@ -2183,15 +2457,6 @@ public final class ChaoRenderer extends EntityRenderer<ChaoEntity> {
                                             materialIndex,
                                             spec.materials().size() - 1));
                     materialIndex++;
-
-                    if (!animatedChildAttachment) {
-                        ChaoGpuRenderCache.DrawBatch batch =
-                                buildStaticTexturedBatch(
-                                        partModel, segment, submesh, mat,
-                                        0x00F000F0, positionMatrix, normalMatrix);
-                        if (batch != null) result.add(batch);
-                        continue;
-                    }
 
                     if (attachment.bilateral()) {
                         ChaoGpuRenderCache.DrawBatch positive =
@@ -2212,7 +2477,7 @@ public final class ChaoRenderer extends EntityRenderer<ChaoEntity> {
                                 buildStaticTexturedBatch(
                                         partModel, segment, submesh, mat,
                                         0x00F000F0, positionMatrix, normalMatrix,
-                                        childAttachmentRigNode(
+                                        attachmentRigNode(
                                                 attachment.positiveXNode()));
                         if (batch != null) result.add(batch);
                     }
@@ -2340,7 +2605,7 @@ public final class ChaoRenderer extends EntityRenderer<ChaoEntity> {
 
         return new ChaoGpuRenderCache.DrawBatch(
                 layer, vertexBuffer, bufferBytes, false, 0.0F,
-                childAttachmentRigNode(sa2Node)
+                attachmentRigNode(sa2Node)
         );
     }
 
@@ -2427,14 +2692,14 @@ public final class ChaoRenderer extends EntityRenderer<ChaoEntity> {
                         batch = buildStaticReflectionBatch(
                                 segment, submesh, mat.texture(), mat.a(), mat.emission(),
                                 0x00F000F0, positionMatrix, normalMatrix,
-                                childAttachmentRigNode(ChaoSa2RigNodeRegistry.HEAD));
+                                attachmentRigNode(ChaoSa2RigNodeRegistry.HEAD));
                     } else {
                         batch = buildStaticTexturedBatch(
                                 model, segment, submesh,
                                 new ChaoAnimalPartCatalog.MaterialSpec(
                                         mat.texture(), mat.r(), mat.g(), mat.b(), mat.a()),
                                 0x00F000F0, positionMatrix, normalMatrix,
-                                childAttachmentRigNode(ChaoSa2RigNodeRegistry.HEAD));
+                                attachmentRigNode(ChaoSa2RigNodeRegistry.HEAD));
                     }
                     if (batch != null) result.add(batch);
                 }
@@ -2460,7 +2725,7 @@ public final class ChaoRenderer extends EntityRenderer<ChaoEntity> {
     /** Draws the shared HeadDeco at this Chao's current Viewer anchor. */
     private void drawHeadDeco(ChaoAppearanceState state, MatrixStack matrices,
             Matrix3f restoreNormalMatrix, int packedLight, boolean legacyPreview,
-            ChaoAnimationPose pose) {
+            ChaoAnimationPose pose, Matrix4f[] renderSpacePalette) {
         if (state.headDeco() == ChaoHeadDecoType.NONE) {
             return;
         }
@@ -2488,11 +2753,9 @@ public final class ChaoRenderer extends EntityRenderer<ChaoEntity> {
 
         matrices.push();
         matrices.translate(anchor.x, anchor.y, -anchor.z);
-        ChaoAnimationPose attachmentPose =
-                state.type() == ChaoVisualType.CHILD ? pose : null;
         drawGpuBatches(
                 batches, matrices, restoreNormalMatrix, packedLight,
-                legacyPreview, attachmentPose
+                legacyPreview, pose, state.reflectionType(), state.type(), renderSpacePalette
         );
         matrices.pop();
     }
@@ -2712,9 +2975,7 @@ public final class ChaoRenderer extends EntityRenderer<ChaoEntity> {
         } finally {
             VertexBuffer.unbind();
         }
-        int rigNode = visualType == ChaoVisualType.CHILD
-                ? childAttachmentRigNode(ChaoSa2RigNodeRegistry.EMOTION)
-                : -1;
+        int rigNode = attachmentRigNode(ChaoSa2RigNodeRegistry.EMOTION);
         return new ChaoGpuRenderCache.DrawBatch(
                 layer, vertexBuffer, bufferBytes, false, 0.0F, rigNode
         );

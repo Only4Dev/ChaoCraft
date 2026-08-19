@@ -26,6 +26,11 @@ public final class ChaoRenderMetrics {
     private static long totalRenderedChao;
     private static long reflectionPasses;
     private static long cacheClears;
+    private static long totalGpuBatchDraws;
+    private static long totalSkinnedBatchDraws;
+    private static long totalReflectionBatchDraws;
+    private static long totalSkinPaletteUploads;
+    private static long totalPreviewFaceChanges;
     private static int boundEntities;
     private static int sharedEntries;
     private static long cachedEstimatedBytes;
@@ -67,6 +72,19 @@ public final class ChaoRenderMetrics {
 
     public static synchronized void onGpuCacheClear() { cacheClears++; }
 
+    /** Render-thread-only hot counters: intentionally unsynchronized to avoid profiling the profiler. */
+    public static void onGpuBatchDraw(boolean skinned, boolean reflected) {
+        totalGpuBatchDraws++;
+        if (skinned) totalSkinnedBatchDraws++;
+        if (reflected) totalReflectionBatchDraws++;
+    }
+
+    /** One upload means the complete 40-node palette was pushed to a skinning shader. */
+    public static void onSkinPaletteUpload() { totalSkinPaletteUploads++; }
+
+    /** Counts actual Visual Lab state changes made while the Face tab is active. */
+    public static void onPreviewFaceChange() { totalPreviewFaceChanges++; }
+
     public static synchronized void onRender(long nanos, boolean reflected) {
         totalRenderNanos += Math.max(0L, nanos);
         totalRenderedChao++;
@@ -85,7 +103,9 @@ public final class ChaoRenderMetrics {
         return new Snapshot(totalBuilds, recentBuilds.size(), totalBatchesUploaded, totalBytesUploaded,
                 cacheHits, cacheMisses, totalEvictions, recentEvictions.size(), totalDeferred,
                 recentDeferred.size(), totalRenderNanos, totalRenderedChao, reflectionPasses, cacheClears,
-                boundEntities, sharedEntries, cachedEstimatedBytes);
+                boundEntities, sharedEntries, cachedEstimatedBytes, totalGpuBatchDraws,
+                totalSkinnedBatchDraws, totalReflectionBatchDraws, totalSkinPaletteUploads,
+                totalPreviewFaceChanges);
     }
 
     public static synchronized void reset() {
@@ -95,6 +115,8 @@ public final class ChaoRenderMetrics {
         totalBuilds = totalBatchesUploaded = totalBytesUploaded = 0L;
         cacheHits = cacheMisses = totalEvictions = totalDeferred = 0L;
         totalRenderNanos = totalRenderedChao = reflectionPasses = cacheClears = 0L;
+        totalGpuBatchDraws = totalSkinnedBatchDraws = totalReflectionBatchDraws = 0L;
+        totalSkinPaletteUploads = totalPreviewFaceChanges = 0L;
         boundEntities = sharedEntries = 0;
         cachedEstimatedBytes = 0L;
     }
@@ -131,7 +153,12 @@ public final class ChaoRenderMetrics {
             long cacheClears,
             int cachedEntities,
             int sharedEntries,
-            long cachedEstimatedBytes
+            long cachedEstimatedBytes,
+            long totalGpuBatchDraws,
+            long totalSkinnedBatchDraws,
+            long totalReflectionBatchDraws,
+            long totalSkinPaletteUploads,
+            long totalPreviewFaceChanges
     ) {
         public double averageRenderMicros() {
             return totalRenderedChao == 0 ? 0.0 : (totalRenderNanos / 1000.0) / totalRenderedChao;
