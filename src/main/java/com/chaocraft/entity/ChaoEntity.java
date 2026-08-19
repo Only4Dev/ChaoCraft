@@ -6,6 +6,7 @@ import com.chaocraft.visual.ChaoColorType;
 import com.chaocraft.visual.ChaoReflectionType;
 import com.chaocraft.visual.ChaoAnimalType;
 import com.chaocraft.visual.ChaoAnimalParts;
+import com.chaocraft.visual.ChaoHeadDecoType;
 import com.chaocraft.visual.ChaoVisualType;
 import net.minecraft.entity.EntityType;
 import net.minecraft.entity.attribute.DefaultAttributeContainer;
@@ -48,6 +49,7 @@ public class ChaoEntity extends PathAwareEntity {
     private static final String NBT_ANIMAL_HORNS = "AnimalHorns";
     private static final String NBT_ANIMAL_EARS = "AnimalEars";
     private static final String NBT_ANIMAL_FOREHEAD = "AnimalForehead";
+    private static final String NBT_HEAD_DECO = "HeadDeco";
     private static final String NBT_CUSTOM_EYES = "CustomEyes";
     private static final String NBT_EYES = "Eyes";
     private static final String NBT_EYELID = "Eyelid";
@@ -79,6 +81,7 @@ public class ChaoEntity extends PathAwareEntity {
     private static final TrackedData<Integer> ANIMAL_HORNS = DataTracker.registerData(ChaoEntity.class, TrackedDataHandlerRegistry.INTEGER);
     private static final TrackedData<Integer> ANIMAL_EARS = DataTracker.registerData(ChaoEntity.class, TrackedDataHandlerRegistry.INTEGER);
     private static final TrackedData<Integer> ANIMAL_FOREHEAD = DataTracker.registerData(ChaoEntity.class, TrackedDataHandlerRegistry.INTEGER);
+    private static final TrackedData<Integer> HEAD_DECO = DataTracker.registerData(ChaoEntity.class, TrackedDataHandlerRegistry.INTEGER);
     private static final TrackedData<Boolean> CUSTOM_EYES = DataTracker.registerData(ChaoEntity.class, TrackedDataHandlerRegistry.BOOLEAN);
     private static final TrackedData<Integer> EYES = DataTracker.registerData(ChaoEntity.class, TrackedDataHandlerRegistry.INTEGER);
     private static final TrackedData<Integer> EYELID = DataTracker.registerData(ChaoEntity.class, TrackedDataHandlerRegistry.INTEGER);
@@ -136,6 +139,7 @@ public class ChaoEntity extends PathAwareEntity {
         this.dataTracker.startTracking(ANIMAL_HORNS, defaults.animalParts().horns().ordinal());
         this.dataTracker.startTracking(ANIMAL_EARS, defaults.animalParts().ears().ordinal());
         this.dataTracker.startTracking(ANIMAL_FOREHEAD, defaults.animalParts().forehead().ordinal());
+        this.dataTracker.startTracking(HEAD_DECO, defaults.headDeco().ordinal());
         this.dataTracker.startTracking(CUSTOM_EYES, defaults.customEyes());
         this.dataTracker.startTracking(EYES, defaults.eyes());
         this.dataTracker.startTracking(EYELID, defaults.eyelid());
@@ -172,6 +176,7 @@ public class ChaoEntity extends PathAwareEntity {
                         ChaoAnimalType.fromOrdinal(this.dataTracker.get(ANIMAL_EARS)),
                         ChaoAnimalType.fromOrdinal(this.dataTracker.get(ANIMAL_FOREHEAD))
                 ),
+                ChaoHeadDecoType.fromOrdinal(this.dataTracker.get(HEAD_DECO)),
                 this.dataTracker.get(CUSTOM_EYES),
                 this.dataTracker.get(EYES),
                 this.dataTracker.get(EYELID),
@@ -206,6 +211,7 @@ public class ChaoEntity extends PathAwareEntity {
         this.dataTracker.set(ANIMAL_HORNS, state.animalParts().horns().ordinal());
         this.dataTracker.set(ANIMAL_EARS, state.animalParts().ears().ordinal());
         this.dataTracker.set(ANIMAL_FOREHEAD, state.animalParts().forehead().ordinal());
+        this.dataTracker.set(HEAD_DECO, state.headDeco().ordinal());
         this.dataTracker.set(CUSTOM_EYES, state.customEyes());
         this.dataTracker.set(EYES, state.eyes());
         this.dataTracker.set(EYELID, state.eyelid());
@@ -242,6 +248,7 @@ public class ChaoEntity extends PathAwareEntity {
         nbt.putInt(NBT_ANIMAL_HORNS, state.animalParts().horns().ordinal());
         nbt.putInt(NBT_ANIMAL_EARS, state.animalParts().ears().ordinal());
         nbt.putInt(NBT_ANIMAL_FOREHEAD, state.animalParts().forehead().ordinal());
+        nbt.putInt(NBT_HEAD_DECO, state.headDeco().ordinal());
         nbt.putBoolean(NBT_CUSTOM_EYES, state.customEyes());
         nbt.putInt(NBT_EYES, state.eyes());
         nbt.putInt(NBT_EYELID, state.eyelid());
@@ -281,6 +288,7 @@ public class ChaoEntity extends PathAwareEntity {
                         nbt.contains(NBT_ANIMAL_EARS) ? ChaoAnimalType.fromOrdinal(nbt.getInt(NBT_ANIMAL_EARS)) : defaults.animalParts().ears(),
                         nbt.contains(NBT_ANIMAL_FOREHEAD) ? ChaoAnimalType.fromOrdinal(nbt.getInt(NBT_ANIMAL_FOREHEAD)) : defaults.animalParts().forehead()
                 ),
+                nbt.contains(NBT_HEAD_DECO) ? ChaoHeadDecoType.fromOrdinal(nbt.getInt(NBT_HEAD_DECO)) : defaults.headDeco(),
                 nbt.contains(NBT_CUSTOM_EYES) ? nbt.getBoolean(NBT_CUSTOM_EYES) : defaults.customEyes(),
                 nbt.contains(NBT_EYES) ? nbt.getInt(NBT_EYES) : defaults.eyes(),
                 nbt.contains(NBT_EYELID) ? nbt.getInt(NBT_EYELID) : defaults.eyelid(),

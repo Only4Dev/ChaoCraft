@@ -38,7 +38,7 @@ public final class ChaoRenderStateQuantizer {
 
         return new ChaoAppearanceState(
                 state.type(), age, alignment, swim, fly, run, power,
-                state.colorType(), state.monotone(), state.reflectionType(), state.animalParts(),
+                state.colorType(), state.monotone(), state.reflectionType(), state.animalParts(), state.headDeco(),
                 state.customEyes(), state.eyes(), state.eyelid(),
                 state.mouth(), state.customMouth(), state.mouthMid(), state.mouthSide(),
                 state.customEmotionBall(), state.neutralBall(), state.heroBall(), state.darkBall(),

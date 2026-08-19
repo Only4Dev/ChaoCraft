@@ -19,6 +19,7 @@ public record ChaoAppearanceState(
         boolean monotone,
         ChaoReflectionType reflectionType,
         ChaoAnimalParts animalParts,
+        ChaoHeadDecoType headDeco,
         boolean customEyes,
         int eyes,
         int eyelid,
@@ -37,7 +38,7 @@ public record ChaoAppearanceState(
             0.0F, 0.0F,
             0.0F, 0.0F, 0.0F, 0.0F,
             ChaoColorType.NORMAL, false,
-            ChaoReflectionType.NONE, ChaoAnimalParts.NONE,
+            ChaoReflectionType.NONE, ChaoAnimalParts.NONE, ChaoHeadDecoType.NONE,
             false, 0, 0,
             0, false, 0, 0,
             false, true, false, false,
@@ -49,6 +50,7 @@ public record ChaoAppearanceState(
         if (colorType == null) colorType = ChaoColorType.NORMAL;
         if (reflectionType == null) reflectionType = ChaoReflectionType.NONE;
         if (animalParts == null) animalParts = ChaoAnimalParts.NONE;
+        if (headDeco == null) headDeco = ChaoHeadDecoType.NONE;
 
         age = finiteClamp(age, 0.0F, 1.0F, 0.0F);
         alignment = finiteClamp(alignment, -100.0F, 100.0F, 0.0F);
@@ -73,6 +75,23 @@ public record ChaoAppearanceState(
         mouthSide = clamp(mouthSide, 0, 18);
     }
 
+    /** Compatibility constructor for callers that predate HeadDeco. */
+    public ChaoAppearanceState(
+            ChaoVisualType type, float age, float alignment,
+            float swim, float fly, float run, float power,
+            ChaoColorType colorType, boolean monotone,
+            ChaoReflectionType reflectionType, ChaoAnimalParts animalParts,
+            boolean customEyes, int eyes, int eyelid,
+            int mouth, boolean customMouth, int mouthMid, int mouthSide,
+            boolean customEmotionBall, boolean neutralBall, boolean heroBall, boolean darkBall,
+            boolean tiltedHalo
+    ) {
+        this(type, age, alignment, swim, fly, run, power,
+                colorType, monotone, reflectionType, animalParts, ChaoHeadDecoType.NONE,
+                customEyes, eyes, eyelid, mouth, customMouth, mouthMid, mouthSide,
+                customEmotionBall, neutralBall, heroBall, darkBall, tiltedHalo);
+    }
+
     /** Compatibility constructor for CP08/CP09 callers that predate reflection/animal parts. */
     public ChaoAppearanceState(
             ChaoVisualType type, float age, float alignment,
@@ -84,7 +103,7 @@ public record ChaoAppearanceState(
             boolean tiltedHalo
     ) {
         this(type, age, alignment, swim, fly, run, power,
-                colorType, monotone, ChaoReflectionType.NONE, ChaoAnimalParts.NONE,
+                colorType, monotone, ChaoReflectionType.NONE, ChaoAnimalParts.NONE, ChaoHeadDecoType.NONE,
                 customEyes, eyes, eyelid, mouth, customMouth, mouthMid, mouthSide,
                 customEmotionBall, neutralBall, heroBall, darkBall, tiltedHalo);
     }
@@ -94,7 +113,7 @@ public record ChaoAppearanceState(
             float swim, float fly, float run, float power) {
         this(type, age, alignment, swim, fly, run, power,
                 ChaoColorType.NORMAL, false,
-                ChaoReflectionType.NONE, ChaoAnimalParts.NONE,
+                ChaoReflectionType.NONE, ChaoAnimalParts.NONE, ChaoHeadDecoType.NONE,
                 false, 0, 0,
                 0, false, 0, 0,
                 false, true, false, false,
@@ -189,97 +208,97 @@ public record ChaoAppearanceState(
             }
         }
         return copy(type, age, alignment, newSwim, newFly, newRun, newPower,
-                colorType, monotone, reflectionType, animalParts,
+                colorType, monotone, reflectionType, animalParts, headDeco,
                 customEyes, eyes, eyelid, mouth, customMouth, mouthMid, mouthSide,
                 customEmotionBall, neutralBall, heroBall, darkBall, tiltedHalo);
     }
 
     public ChaoAppearanceState withType(ChaoVisualType value) {
-        return copy(value, age, alignment, swim, fly, run, power, colorType, monotone, reflectionType, animalParts,
+        return copy(value, age, alignment, swim, fly, run, power, colorType, monotone, reflectionType, animalParts, headDeco,
                 customEyes, eyes, eyelid, mouth, customMouth, mouthMid, mouthSide,
                 customEmotionBall, neutralBall, heroBall, darkBall, tiltedHalo);
     }
 
     public ChaoAppearanceState withAge(float value) {
-        return copy(type, value, alignment, swim, fly, run, power, colorType, monotone, reflectionType, animalParts,
+        return copy(type, value, alignment, swim, fly, run, power, colorType, monotone, reflectionType, animalParts, headDeco,
                 customEyes, eyes, eyelid, mouth, customMouth, mouthMid, mouthSide,
                 customEmotionBall, neutralBall, heroBall, darkBall, tiltedHalo);
     }
 
     public ChaoAppearanceState withAlignment(float value) {
-        return copy(type, age, value, swim, fly, run, power, colorType, monotone, reflectionType, animalParts,
+        return copy(type, age, value, swim, fly, run, power, colorType, monotone, reflectionType, animalParts, headDeco,
                 customEyes, eyes, eyelid, mouth, customMouth, mouthMid, mouthSide,
                 customEmotionBall, neutralBall, heroBall, darkBall, tiltedHalo);
     }
 
     public ChaoAppearanceState withAutoEyes() {
-        return copy(type, age, alignment, swim, fly, run, power, colorType, monotone, reflectionType, animalParts,
+        return copy(type, age, alignment, swim, fly, run, power, colorType, monotone, reflectionType, animalParts, headDeco,
                 false, eyes, eyelid, mouth, customMouth, mouthMid, mouthSide,
                 customEmotionBall, neutralBall, heroBall, darkBall, tiltedHalo);
     }
 
     public ChaoAppearanceState withEyes(int value) {
-        return copy(type, age, alignment, swim, fly, run, power, colorType, monotone, reflectionType, animalParts,
+        return copy(type, age, alignment, swim, fly, run, power, colorType, monotone, reflectionType, animalParts, headDeco,
                 true, value, eyelid, mouth, customMouth, mouthMid, mouthSide,
                 customEmotionBall, neutralBall, heroBall, darkBall, tiltedHalo);
     }
 
     public ChaoAppearanceState withEyelid(int value) {
-        return copy(type, age, alignment, swim, fly, run, power, colorType, monotone, reflectionType, animalParts,
+        return copy(type, age, alignment, swim, fly, run, power, colorType, monotone, reflectionType, animalParts, headDeco,
                 true, eyes, value, mouth, customMouth, mouthMid, mouthSide,
                 customEmotionBall, neutralBall, heroBall, darkBall, tiltedHalo);
     }
 
     public ChaoAppearanceState withMouth(int value) {
-        return copy(type, age, alignment, swim, fly, run, power, colorType, monotone, reflectionType, animalParts,
+        return copy(type, age, alignment, swim, fly, run, power, colorType, monotone, reflectionType, animalParts, headDeco,
                 customEyes, eyes, eyelid, value, false, mouthMid, mouthSide,
                 customEmotionBall, neutralBall, heroBall, darkBall, tiltedHalo);
     }
 
     public ChaoAppearanceState withAdvancedMouth(int mid, int side) {
-        return copy(type, age, alignment, swim, fly, run, power, colorType, monotone, reflectionType, animalParts,
+        return copy(type, age, alignment, swim, fly, run, power, colorType, monotone, reflectionType, animalParts, headDeco,
                 customEyes, eyes, eyelid, mouth, true, mid, side,
                 customEmotionBall, neutralBall, heroBall, darkBall, tiltedHalo);
     }
 
     public ChaoAppearanceState withStandardMouthMode() {
-        return copy(type, age, alignment, swim, fly, run, power, colorType, monotone, reflectionType, animalParts,
+        return copy(type, age, alignment, swim, fly, run, power, colorType, monotone, reflectionType, animalParts, headDeco,
                 customEyes, eyes, eyelid, mouth, false, mouthMid, mouthSide,
                 customEmotionBall, neutralBall, heroBall, darkBall, tiltedHalo);
     }
 
     public ChaoAppearanceState withAutoEmotionBall() {
-        return copy(type, age, alignment, swim, fly, run, power, colorType, monotone, reflectionType, animalParts,
+        return copy(type, age, alignment, swim, fly, run, power, colorType, monotone, reflectionType, animalParts, headDeco,
                 customEyes, eyes, eyelid, mouth, customMouth, mouthMid, mouthSide,
                 false, neutralBall, heroBall, darkBall, tiltedHalo);
     }
 
     public ChaoAppearanceState withCustomEmotionBalls(boolean neutral, boolean hero, boolean dark) {
-        return copy(type, age, alignment, swim, fly, run, power, colorType, monotone, reflectionType, animalParts,
+        return copy(type, age, alignment, swim, fly, run, power, colorType, monotone, reflectionType, animalParts, headDeco,
                 customEyes, eyes, eyelid, mouth, customMouth, mouthMid, mouthSide,
                 true, neutral, hero, dark, tiltedHalo);
     }
 
     public ChaoAppearanceState withTiltedHalo(boolean value) {
-        return copy(type, age, alignment, swim, fly, run, power, colorType, monotone, reflectionType, animalParts,
+        return copy(type, age, alignment, swim, fly, run, power, colorType, monotone, reflectionType, animalParts, headDeco,
                 customEyes, eyes, eyelid, mouth, customMouth, mouthMid, mouthSide,
                 customEmotionBall, neutralBall, heroBall, darkBall, value);
     }
 
     public ChaoAppearanceState withColorType(ChaoColorType value) {
-        return copy(type, age, alignment, swim, fly, run, power, value, monotone, reflectionType, animalParts,
+        return copy(type, age, alignment, swim, fly, run, power, value, monotone, reflectionType, animalParts, headDeco,
                 customEyes, eyes, eyelid, mouth, customMouth, mouthMid, mouthSide,
                 customEmotionBall, neutralBall, heroBall, darkBall, tiltedHalo);
     }
 
     public ChaoAppearanceState withMonotone(boolean value) {
-        return copy(type, age, alignment, swim, fly, run, power, colorType, value, reflectionType, animalParts,
+        return copy(type, age, alignment, swim, fly, run, power, colorType, value, reflectionType, animalParts, headDeco,
                 customEyes, eyes, eyelid, mouth, customMouth, mouthMid, mouthSide,
                 customEmotionBall, neutralBall, heroBall, darkBall, tiltedHalo);
     }
 
     public ChaoAppearanceState withReflectionType(ChaoReflectionType value) {
-        return copy(type, age, alignment, swim, fly, run, power, colorType, monotone, value, animalParts,
+        return copy(type, age, alignment, swim, fly, run, power, colorType, monotone, value, animalParts, headDeco,
                 customEyes, eyes, eyelid, mouth, customMouth, mouthMid, mouthSide,
                 customEmotionBall, neutralBall, heroBall, darkBall, tiltedHalo);
     }
@@ -289,7 +308,7 @@ public record ChaoAppearanceState(
     }
 
     public ChaoAppearanceState withAnimalParts(ChaoAnimalParts value) {
-        return copy(type, age, alignment, swim, fly, run, power, colorType, monotone, reflectionType, value,
+        return copy(type, age, alignment, swim, fly, run, power, colorType, monotone, reflectionType, value, headDeco,
                 customEyes, eyes, eyelid, mouth, customMouth, mouthMid, mouthSide,
                 customEmotionBall, neutralBall, heroBall, darkBall, tiltedHalo);
     }
@@ -298,8 +317,16 @@ public record ChaoAppearanceState(
         return withAnimalParts(ChaoAnimalParts.NONE);
     }
 
+    public ChaoAppearanceState withHeadDeco(ChaoHeadDecoType value) {
+        return copy(type, age, alignment, swim, fly, run, power,
+                colorType, monotone, reflectionType, animalParts,
+                value == null ? ChaoHeadDecoType.NONE : value,
+                customEyes, eyes, eyelid, mouth, customMouth, mouthMid, mouthSide,
+                customEmotionBall, neutralBall, heroBall, darkBall, tiltedHalo);
+    }
+
     public ChaoAppearanceState resetFace() {
-        return copy(type, age, alignment, swim, fly, run, power, colorType, monotone, reflectionType, animalParts,
+        return copy(type, age, alignment, swim, fly, run, power, colorType, monotone, reflectionType, animalParts, headDeco,
                 false, 0, 0, 0, false, 0, 0,
                 customEmotionBall, neutralBall, heroBall, darkBall, tiltedHalo);
     }
@@ -308,14 +335,14 @@ public record ChaoAppearanceState(
             ChaoVisualType type, float age, float alignment,
             float swim, float fly, float run, float power,
             ChaoColorType colorType, boolean monotone,
-            ChaoReflectionType reflectionType, ChaoAnimalParts animalParts,
+            ChaoReflectionType reflectionType, ChaoAnimalParts animalParts, ChaoHeadDecoType headDeco,
             boolean customEyes, int eyes, int eyelid,
             int mouth, boolean customMouth, int mouthMid, int mouthSide,
             boolean customEmotionBall, boolean neutralBall, boolean heroBall, boolean darkBall,
             boolean tiltedHalo
     ) {
         return new ChaoAppearanceState(type, age, alignment, swim, fly, run, power,
-                colorType, monotone, reflectionType, animalParts,
+                colorType, monotone, reflectionType, animalParts, headDeco,
                 customEyes, eyes, eyelid, mouth, customMouth, mouthMid, mouthSide,
                 customEmotionBall, neutralBall, heroBall, darkBall, tiltedHalo);
     }

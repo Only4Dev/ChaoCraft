@@ -131,9 +131,13 @@ public final class ChaoAnimalAnchorProfiles {
             case ARMS -> new Vector3f(mixed.arms());
             case WINGS -> new Vector3f(p.owp() ? mixed.wings() : mixed.arms());
             case TAIL -> new Vector3f(mixed.tail());
-            case FACE -> new Vector3f(p.ofp() ? mixed.face() : mixed.mouth());
+            // Chao Viewer CalcPartsLocations():
+            //   facePos = !ofp ? FacePosition : mouthPosition
+            //   fhPos   = FacePosition
+            // The previous mapping had both rules reversed for facial parts.
+            case FACE -> new Vector3f(p.ofp() ? mixed.mouth() : mixed.face());
             case HORNS, EARS -> new Vector3f(mixed.ears());
-            case FOREHEAD -> new Vector3f(mixed.mouth());
+            case FOREHEAD -> new Vector3f(mixed.face());
             case LEGS -> new Vector3f();
         };
     }
@@ -142,10 +146,14 @@ public final class ChaoAnimalAnchorProfiles {
         float young = Math.max(0F, 1F - s.age());
         float age = s.age();
         float normal = (s.normal() / 100F) * age;
-        float swim = (s.swim() / 100F) * age;
-        float fly = (s.fly() / 100F) * age;
-        float run = (s.run() / 100F) * age;
-        float power = (s.power() / 100F) * age;
+
+        // Viewer CalcColorGroups()/CalcPartsLocations() only age-scales the
+        // Normal contribution. Stat-specialized morph/anchor weights remain
+        // direct percentages regardless of Age.
+        float swim = s.swim() / 100F;
+        float fly = s.fly() / 100F;
+        float run = s.run() / 100F;
+        float power = s.power() / 100F;
         return weighted(p.young(), young, p.normal(), normal, p.swim(), swim, p.fly(), fly, p.run(), run, p.power(), power);
     }
 

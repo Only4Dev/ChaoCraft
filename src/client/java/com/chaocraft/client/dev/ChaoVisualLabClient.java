@@ -1,8 +1,9 @@
 package com.chaocraft.client.dev;
 
 import com.chaocraft.client.render.ChaoRenderer;
+import com.chaocraft.client.render.ChaoClientResourcePreloader;
 import com.chaocraft.client.render.debug.ChaoRenderMetrics;
-import com.chaocraft.client.perf.ChaoPerformanceProfiler;
+import com.chaocraft.client.perf.ChaoPerformanceWatchdog;
 import com.chaocraft.dev.ChaoVisualLabNetworking;
 import com.chaocraft.visual.ChaoAppearanceState;
 import net.fabricmc.fabric.api.client.event.lifecycle.v1.ClientTickEvents;
@@ -31,7 +32,13 @@ public final class ChaoVisualLabClient {
         ));
 
         ClientTickEvents.END_CLIENT_TICK.register(client -> {
-            ChaoPerformanceProfiler.tick(client);
+            // Resource reload only schedules the warm-up. Upload atomic Chao
+            // textures here after Minecraft's own TextureManager reload is complete.
+            ChaoClientResourcePreloader.preloadPending(client);
+            if (client.world != null) {
+                ChaoRenderer.maintainCaches(client.world.getTime());
+            }
+            ChaoPerformanceWatchdog.tick(client);
             while (openLabKey.wasPressed()) {
                 if (client.currentScreen instanceof ChaoVisualLabScreen) {
                     client.setScreen(null);
@@ -42,17 +49,22 @@ public final class ChaoVisualLabClient {
         });
 
         ClientPlayConnectionEvents.JOIN.register((handler, sender, client) -> {
-            // Renderer instances survive world transitions. Never carry native
-            // VAO/VBO state from one ClientWorld into another.
-            ChaoRenderer.clearAllCaches(false);
             ChaoRenderMetrics.reset();
-            ChaoPerformanceProfiler.event("WORLD_JOIN");
+            ChaoPerformanceWatchdog.reset();
+
+            long worldTick = client.world == null ? 0L : client.world.getTime();
+            ChaoRenderer.beginWorldCaches(worldTick);
+            ChaoPerformanceWatchdog.event("WORLD_JOIN_WARM_CACHE");
         });
 
         ClientPlayConnectionEvents.DISCONNECT.register((handler, client) -> {
-            ChaoPerformanceProfiler.event("WORLD_DISCONNECT");
-            ChaoRenderer.clearAllCaches(false);
+            ChaoPerformanceWatchdog.event("WORLD_DISCONNECT_KEEP_WARM");
+
+            // Server/world objects are gone, but immutable visual VBOs are not
+            // world data. Detach UUID bindings and keep the bounded shared cache.
             ChaoRenderMetrics.reset();
+            ChaoRenderer.detachWorldCaches();
+            ChaoPerformanceWatchdog.reset();
         });
     }
 
@@ -67,48 +79,48 @@ public final class ChaoVisualLabClient {
     }
 
     public static void spawnAdultMatrix() {
-        ChaoPerformanceProfiler.event("MATRIX_BASE_REQUEST");
+        ChaoPerformanceWatchdog.event("MATRIX_BASE_REQUEST");
         ClientPlayNetworking.send(ChaoVisualLabNetworking.SPAWN_ADULT_MATRIX, PacketByteBufs.empty());
     }
 
     public static void spawnChaosMatrix() {
-        ChaoPerformanceProfiler.event("MATRIX_CHAOS_REQUEST");
+        ChaoPerformanceWatchdog.event("MATRIX_CHAOS_REQUEST");
         ClientPlayNetworking.send(ChaoVisualLabNetworking.SPAWN_CHAOS_MATRIX, PacketByteBufs.empty());
     }
 
     public static void spawnColorMatrix(ChaoAppearanceState baseState) {
-        ChaoPerformanceProfiler.event("MATRIX_COLOR_REQUEST");
+        ChaoPerformanceWatchdog.event("MATRIX_COLOR_REQUEST");
         PacketByteBuf buf = PacketByteBufs.create();
         ChaoVisualLabNetworking.writeState(buf, baseState);
         ClientPlayNetworking.send(ChaoVisualLabNetworking.SPAWN_COLOR_MATRIX, buf);
     }
 
     public static void spawnReflectionMatrix(ChaoAppearanceState baseState) {
-        ChaoPerformanceProfiler.event("MATRIX_REFLECTION_REQUEST");
+        ChaoPerformanceWatchdog.event("MATRIX_REFLECTION_REQUEST");
         PacketByteBuf buf = PacketByteBufs.create();
         ChaoVisualLabNetworking.writeState(buf, baseState);
         ClientPlayNetworking.send(ChaoVisualLabNetworking.SPAWN_REFLECTION_MATRIX, buf);
     }
 
     public static void spawnAnimalMatrix(ChaoAppearanceState baseState) {
-        ChaoPerformanceProfiler.event("MATRIX_ANIMAL_REQUEST");
+        ChaoPerformanceWatchdog.event("MATRIX_ANIMAL_REQUEST");
         PacketByteBuf buf = PacketByteBufs.create();
         ChaoVisualLabNetworking.writeState(buf, baseState);
         ClientPlayNetworking.send(ChaoVisualLabNetworking.SPAWN_ANIMAL_MATRIX, buf);
     }
 
     public static void spawnAdultExtremes() {
-        ChaoPerformanceProfiler.event("MATRIX_ADULT_75_REQUEST");
+        ChaoPerformanceWatchdog.event("MATRIX_ADULT_75_REQUEST");
         ClientPlayNetworking.send(ChaoVisualLabNetworking.SPAWN_ADULT_EXTREMES, PacketByteBufs.empty());
     }
 
     public static void spawnChildExtremes() {
-        ChaoPerformanceProfiler.event("MATRIX_CHILD_REQUEST");
+        ChaoPerformanceWatchdog.event("MATRIX_CHILD_REQUEST");
         ClientPlayNetworking.send(ChaoVisualLabNetworking.SPAWN_CHILD_EXTREMES, PacketByteBufs.empty());
     }
 
     public static void clearAdultMatrix() {
-        ChaoPerformanceProfiler.event("MATRIX_CLEAR_REQUEST");
+        ChaoPerformanceWatchdog.event("MATRIX_CLEAR_REQUEST");
         ClientPlayNetworking.send(ChaoVisualLabNetworking.CLEAR_ADULT_MATRIX, PacketByteBufs.empty());
     }
 }

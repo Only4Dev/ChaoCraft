@@ -535,6 +535,11 @@ public final class ChaoAnimalPartCatalog {
                 0.0F, 0.0F, 0.0F, -0.7071068F, -0.0F, -0.0F, 0.7071068F, 1.0F, 1.0F, 1.0F);
         put(true, 2, Slot.ARMS, "chaocraft:models/chao/animal/adult/02_arms.cmesh", List.of(new MaterialSpec(new Identifier("chaocraft:textures/entity/chao/animal/alp_usa_sippo.png"), 1.0F, 1.0F, 1.0F, 1.0F)),
                 0.0F, 0.0F, 0.0F, -0.7071068F, -0.0F, -0.0F, 0.7071068F, 1.0F, 1.0F, 1.0F);
+        // Viewer scene parity: COttNosehair is a real Child Otter Face AnimalObject,
+        // but it intentionally uses Unity's built-in primitive with invisible.mat
+        // (alpha 0). Keep the slot semantically present without inventing visible
+        // geometry that does not exist in the source.
+        putInvisible(false, 7, Slot.FACE, 0.0F, 2.23F, 0.0F, 0.13001418F);
     }
 
     private ChaoAnimalPartCatalog() {}
@@ -543,7 +548,20 @@ public final class ChaoAnimalPartCatalog {
             float px, float py, float pz, float qx, float qy, float qz, float qw, float sx, float sy, float sz) {
         PARTS.put(new Key(adult, ChaoAnimalType.fromOrdinal(animalId), slot),
                 new PartSpec(new Identifier(model), materials, new Vector3f(px, py, pz),
-                        new Quaternionf(qx, qy, qz, qw), new Vector3f(sx, sy, sz)));
+                        new Quaternionf(qx, qy, qz, qw), new Vector3f(sx, sy, sz), true));
+    }
+
+    /**
+     * Registers an AnimalObject that exists in the Viewer hierarchy but is
+     * intentionally invisible there. This preserves slot availability/parity
+     * without manufacturing a Minecraft mesh for a source object that draws nothing.
+     */
+    private static void putInvisible(boolean adult, int animalId, Slot slot,
+            float px, float py, float pz, float uniformScale) {
+        PARTS.put(new Key(adult, ChaoAnimalType.fromOrdinal(animalId), slot),
+                new PartSpec(null, List.of(), new Vector3f(px, py, pz),
+                        new Quaternionf(0.0F, 0.0F, 0.0F, 1.0F),
+                        new Vector3f(uniformScale, uniformScale, uniformScale), false));
     }
 
     public static PartSpec resolve(boolean adult, ChaoAnimalType animal, Slot slot) {
@@ -564,5 +582,6 @@ public final class ChaoAnimalPartCatalog {
 
     public record MaterialSpec(Identifier texture, float r, float g, float b, float a) {}
 
-    public record PartSpec(Identifier model, List<MaterialSpec> materials, Vector3f position, Quaternionf rotation, Vector3f scale) {}
+    public record PartSpec(Identifier model, List<MaterialSpec> materials, Vector3f position,
+            Quaternionf rotation, Vector3f scale, boolean visible) {}
 }

@@ -13,12 +13,11 @@ import java.util.UUID;
 import java.util.WeakHashMap;
 
 /**
- * Per-entity client render cache.
+ * CPU-side morph preparation cache used only while constructing a GPU state.
  *
- * <p>The extracted Child model is large enough that recalculating every blend
- * shape for every material pass on every frame is prohibitively expensive.
- * This cache keeps the already-morphed geometry until the visual state changes.
- * Weak entity keys ensure unloaded/dead Chao do not keep client memory alive.</p>
+ * <p>CP11R.18 makes GPU VBOs the persistent representation. Prepared position/
+ * normal arrays are scratch data and are released immediately after upload, so
+ * the client does not retain a second morphed CPU copy for every visible Chao.</p>
  */
 public final class ChaoRenderCache {
     private final Map<ChaoEntity, Entry> entries = new WeakHashMap<>();
@@ -51,9 +50,8 @@ public final class ChaoRenderCache {
         for (ChaoMeshModel.Segment segment : model.segments()) {
             float[] segmentWeights = morphWeights;
             if (sizeDownIndex >= 0 && isBaseSegmentReplaced(segment.name(), state)) {
-                // Chao Viewer SetBlendShapeWeights() retracts the original body
-                // segment through its SizeDown key when an animal part occupies
-                // Arms/Legs/Tail/Wings. It does not simply hide the mesh.
+                // Viewer SetBlendShapeWeights(): replaced renderers clear their
+                // active family morph and use SizeDown=100% as the replacement shape.
                 segmentWeights = new float[morphWeights.length];
                 segmentWeights[sizeDownIndex] = 1.0F;
             }
@@ -64,11 +62,21 @@ public final class ChaoRenderCache {
 
     private static boolean isBaseSegmentReplaced(String segmentName, ChaoAppearanceState state) {
         String name = segmentName.toLowerCase(java.util.Locale.ROOT);
-        if (name.contains("arm")) return state.animalParts().get(Slot.ARMS) != ChaoAnimalType.NONE;
-        if (name.contains("leg") || name.contains("feet")) return state.animalParts().get(Slot.LEGS) != ChaoAnimalType.NONE;
-        if (name.contains("tail")) return state.animalParts().get(Slot.TAIL) != ChaoAnimalType.NONE;
-        if (name.contains("wing")) return state.animalParts().get(Slot.WINGS) != ChaoAnimalType.NONE;
+        if (name.contains("arm")) return hasPart(state, Slot.ARMS);
+        if (name.contains("leg") || name.contains("feet")) return hasPart(state, Slot.LEGS);
+        if (name.contains("tail")) return hasPart(state, Slot.TAIL);
+        if (name.contains("wing")) return hasPart(state, Slot.WINGS);
+
+        // Viewer HeadDeco is the only decoration category that retracts the
+        // base Head renderer. Ordinary Face/Forehead/Horns/Ears are attachments.
+        if (name.contains("head")) {
+            return state.headDeco() != com.chaocraft.visual.ChaoHeadDecoType.NONE;
+        }
         return false;
+    }
+
+    private static boolean hasPart(ChaoAppearanceState state, Slot slot) {
+        return state.animalParts().get(slot) != ChaoAnimalType.NONE;
     }
 
     private static PreparedSegment prepareSegment(ChaoMeshModel.Segment segment, float[] weights) {

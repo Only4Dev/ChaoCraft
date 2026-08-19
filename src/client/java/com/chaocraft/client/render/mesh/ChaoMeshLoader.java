@@ -15,6 +15,7 @@ public final class ChaoMeshLoader {
 	private static final int VERSION_LEGACY_ADULT = 1;
 	private static final int VERSION_NAMED_MORPHS = 2;
 	private static final int VERSION_SUBMESHES = 3;
+	private static final int VERSION_SKINNED = 4;
 	private static final long MAX_MODEL_ARRAY_BYTES = 128L * 1024L * 1024L;
 
 	private ChaoMeshLoader() {
@@ -29,7 +30,7 @@ public final class ChaoMeshLoader {
 			}
 
 			int version = data.readInt();
-			if (version != VERSION_LEGACY_ADULT && version != VERSION_NAMED_MORPHS && version != VERSION_SUBMESHES) {
+			if (version != VERSION_LEGACY_ADULT && version != VERSION_NAMED_MORPHS && version != VERSION_SUBMESHES && version != VERSION_SKINNED) {
 				throw new IOException("Unsupported Chao mesh version: " + version);
 			}
 
@@ -68,7 +69,8 @@ public final class ChaoMeshLoader {
 				// so a malformed .cmesh cannot request hundreds of MB/GB of heap/native
 				// follow-up buffers even if each individual count passes its simple range.
 				long floatsPerVertex = 8L + (long) morphCount * 6L;
-				long segmentBytes = (long) vertexCount * floatsPerVertex * Float.BYTES
+				long skinBytesPerVertex = version >= VERSION_SKINNED ? 2L * Integer.BYTES : 0L;
+				long segmentBytes = (long) vertexCount * (floatsPerVertex * Float.BYTES + skinBytesPerVertex)
 						+ (long) indexCount * Integer.BYTES;
 				estimatedModelBytes += segmentBytes;
 				if (segmentBytes < 0L || estimatedModelBytes > MAX_MODEL_ARRAY_BYTES) {
@@ -100,6 +102,7 @@ public final class ChaoMeshLoader {
 				float[] uvs = new float[vertexCount * 2];
 				float[][] morphPositions = new float[morphCount][vertexCount * 3];
 				float[][] morphNormals = new float[morphCount][vertexCount * 3];
+				int[] skinPacked = version >= VERSION_SKINNED ? new int[vertexCount * 2] : null;
 
 				for (int vertex = 0; vertex < vertexCount; vertex++) {
 					int p = vertex * 3;
@@ -121,6 +124,10 @@ public final class ChaoMeshLoader {
 						morphNormals[morph][p + 1] = data.readFloat();
 						morphNormals[morph][p + 2] = data.readFloat();
 					}
+					if (skinPacked != null) {
+						skinPacked[vertex * 2] = data.readInt();
+						skinPacked[vertex * 2 + 1] = data.readInt();
+					}
 				}
 
 				int[] indices = new int[indexCount];
@@ -134,7 +141,7 @@ public final class ChaoMeshLoader {
 
 				segments.add(new ChaoMeshModel.Segment(
 						name, vertexCount, positions, normals, uvs,
-						morphPositions, morphNormals, indices, submeshes
+						morphPositions, morphNormals, skinPacked, indices, submeshes
 				));
 			}
 			return new ChaoMeshModel(morphNames, segments);

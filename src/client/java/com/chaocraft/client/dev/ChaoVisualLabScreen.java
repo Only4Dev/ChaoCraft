@@ -1,8 +1,11 @@
 package com.chaocraft.client.dev;
 
 import com.chaocraft.client.render.ChaoRenderer;
+import com.chaocraft.client.animation.ChaoAnimationClip;
+import com.chaocraft.client.animation.ChaoAnimationRepository;
+import com.chaocraft.client.animation.ChaoAnimationLabSettings;
+import com.chaocraft.client.animation.ChaoRigContract;
 import com.chaocraft.client.render.debug.ChaoRenderMetrics;
-import com.chaocraft.client.perf.ChaoPerformanceProfiler;
 import com.chaocraft.entity.ChaoEntity;
 import com.chaocraft.entity.ModEntities;
 import com.chaocraft.visual.ChaoAppearanceState;
@@ -11,6 +14,7 @@ import com.chaocraft.visual.ChaoColorType;
 import com.chaocraft.visual.ChaoReflectionType;
 import com.chaocraft.visual.ChaoAnimalType;
 import com.chaocraft.visual.ChaoAnimalParts;
+import com.chaocraft.visual.ChaoHeadDecoType;
 import com.chaocraft.visual.ChaoAnimalParts.Slot;
 import com.chaocraft.client.render.animal.ChaoAnimalPartCatalog;
 import com.chaocraft.visual.ChaoVisualType;
@@ -54,6 +58,13 @@ public final class ChaoVisualLabScreen extends Screen {
     private int presetIndex = 0;
     private LabTab activeTab = LabTab.BODY;
 
+    // Animation Lab state. CP12A deliberately keeps this client-only: selecting
+    // or scrubbing a motion never mutates the server Chao or its appearance cache.
+    private int animationIndex = 37; // SA Tools export shown by the user: Chao Sprint.
+    private boolean animationPlaying = true;
+    private double animationFrame;
+    private LabSlider animationFrameSlider;
+
     private LabSlider swimSlider;
     private LabSlider flySlider;
     private LabSlider runSlider;
@@ -90,17 +101,19 @@ public final class ChaoVisualLabScreen extends Screen {
         int full = layout.controlsWidth();
         int half = (full - GAP) / 2;
 
-        int tabWidth = (full - GAP * 3) / 4;
+        int tabWidth = (full - GAP * 4) / 5;
         addTabButton(LabTab.BODY, x, y, tabWidth);
         addTabButton(LabTab.FACE, x + tabWidth + GAP, y, tabWidth);
         addTabButton(LabTab.PARTS, x + (tabWidth + GAP) * 2, y, tabWidth);
-        addTabButton(LabTab.TEST, x + (tabWidth + GAP) * 3, y, full - (tabWidth + GAP) * 3);
+        addTabButton(LabTab.ANIM, x + (tabWidth + GAP) * 3, y, tabWidth);
+        addTabButton(LabTab.TEST, x + (tabWidth + GAP) * 4, y, full - (tabWidth + GAP) * 4);
         y += WIDGET_HEIGHT + GAP + 3;
 
         switch (activeTab) {
             case BODY -> initBodyTab(x, y, full, half);
             case FACE -> initFaceTab(x, y, full, half);
             case PARTS -> initPartsTab(x, y, full, half);
+            case ANIM -> initAnimTab(x, y, full, half);
             case TEST -> initTestTab(x, y, full, half);
         }
 
@@ -192,8 +205,58 @@ public final class ChaoVisualLabScreen extends Screen {
             y += WIDGET_HEIGHT + GAP;
         }
         y += 2;
-        addDrawableChild(ButtonWidget.builder(Text.literal("Clear Animal Parts"), button -> update(ChaoAppearanceState::clearAnimalParts, true))
+        addDrawableChild(ButtonWidget.builder(Text.literal("Head Deco: " + draft.headDeco().displayName()), button -> cycleHeadDeco())
                 .dimensions(x, y, full, WIDGET_HEIGHT).build());
+        y += WIDGET_HEIGHT + GAP;
+        addDrawableChild(ButtonWidget.builder(Text.literal("Clear Animal Parts + Head"), button ->
+                        update(state -> state.clearAnimalParts().withHeadDeco(ChaoHeadDecoType.NONE), true))
+                .dimensions(x, y, full, WIDGET_HEIGHT).build());
+    }
+
+    private void initAnimTab(int x, int y, int full, int half) {
+        ChaoAnimationClip clip = selectedAnimation();
+        if (clip == null) {
+            addDrawableChild(ButtonWidget.builder(Text.literal("No animation resources loaded"), button -> {})
+                    .dimensions(x, y, full, WIDGET_HEIGHT).build());
+            return;
+        }
+
+        addDrawableChild(ButtonWidget.builder(Text.literal("<"), button -> changeAnimation(-1))
+                .dimensions(x, y, 24, WIDGET_HEIGHT).build());
+        addDrawableChild(ButtonWidget.builder(Text.literal(animationSelectorLabel(clip)), button -> changeAnimation(1))
+                .dimensions(x + 26, y, full - 52, WIDGET_HEIGHT).build());
+        addDrawableChild(ButtonWidget.builder(Text.literal(">"), button -> changeAnimation(1))
+                .dimensions(x + full - 24, y, 24, WIDGET_HEIGHT).build());
+        y += WIDGET_HEIGHT + GAP;
+
+        addDrawableChild(ButtonWidget.builder(Text.literal(animationPlaying ? "Pause" : "Play"), button -> toggleAnimationPlayback())
+                .dimensions(x, y, half, WIDGET_HEIGHT).build());
+        addDrawableChild(ButtonWidget.builder(Text.literal("Restart"), button -> restartAnimation())
+                .dimensions(x + half + GAP, y, half, WIDGET_HEIGHT).build());
+        y += WIDGET_HEIGHT + GAP;
+
+        animationFrameSlider = addSlider(new LabSlider(
+                x, y, full, "Frame", 0.0D, Math.max(0.0D, clip.frames() - 1.0D),
+                Math.min(animationFrame, Math.max(0, clip.frames() - 1)), 2, value -> {
+                    animationFrame = value;
+                    animationPlaying = false;
+                }));
+        y += WIDGET_HEIGHT + GAP;
+
+        addSlider(new LabSlider(
+                x, y, full, "Speed", 0.05D, 2.00D,
+                ChaoAnimationLabSettings.speed(clip), 2,
+                value -> {
+                    ChaoAnimationLabSettings.setSpeed(clip, value);
+                    flash("Saved " + animationSelectorLabel(clip) + " speed = "
+                            + String.format(Locale.ROOT, "%.2f", value));
+                }));
+        y += WIDGET_HEIGHT + GAP + 3;
+
+        addDrawableChild(ButtonWidget.builder(Text.literal("Previous Clip"), button -> changeAnimation(-1))
+                .dimensions(x, y, half, WIDGET_HEIGHT).build());
+        addDrawableChild(ButtonWidget.builder(Text.literal("Next Clip"), button -> changeAnimation(1))
+                .dimensions(x + half + GAP, y, half, WIDGET_HEIGHT).build());
     }
 
     private void initTestTab(int x, int y, int full, int half) {
@@ -241,17 +304,64 @@ public final class ChaoVisualLabScreen extends Screen {
                 .dimensions(x, y, half, WIDGET_HEIGHT).build());
         addDrawableChild(ButtonWidget.builder(Text.literal("Clear Matrix"), button -> clearMatrix())
                 .dimensions(x + half + GAP, y, half, WIDGET_HEIGHT).build());
-        y += WIDGET_HEIGHT + GAP;
+    }
 
-        addDrawableChild(ButtonWidget.builder(Text.literal(ChaoPerformanceProfiler.isRunning()
-                        ? "Stop Perf Log" : "Start Perf Log"), button -> {
-                    ChaoPerformanceProfiler.toggle(client);
-                    rebuild();
-                }).dimensions(x, y, half, WIDGET_HEIGHT).build());
-        addDrawableChild(ButtonWidget.builder(Text.literal("Perf Snapshot"), button -> {
-                    ChaoPerformanceProfiler.snapshotNow(client);
-                    flash("Performance snapshot written");
-                }).dimensions(x + half + GAP, y, half, WIDGET_HEIGHT).build());
+    private ChaoAnimationClip selectedAnimation() {
+        return ChaoAnimationRepository.clip(animationIndex);
+    }
+
+    private void changeAnimation(int delta) {
+        int size = ChaoAnimationRepository.clips().size();
+        if (size == 0) return;
+        animationIndex = Math.floorMod(animationIndex + delta, size);
+        animationFrame = 0.0D;
+        animationPlaying = true;
+        rebuild();
+    }
+
+    private void toggleAnimationPlayback() {
+        animationPlaying = !animationPlaying;
+        rebuild();
+    }
+
+    private void restartAnimation() {
+        animationFrame = 0.0D;
+        animationPlaying = true;
+        rebuild();
+    }
+
+    private String animationSelectorLabel(ChaoAnimationClip clip) {
+        return String.format(Locale.ROOT, "%03d %s", clip.exportIndex(), clip.name());
+    }
+
+    private void renderAnimationDiagnostics(DrawContext context, LabLayout layout) {
+        ChaoAnimationClip clip = selectedAnimation();
+        if (clip == null) return;
+        int x = layout.controlsX() + 4;
+        int y = 150;
+        context.drawTextWithShadow(textRenderer, Text.literal("SA2 raw clip"), x, y, 0xFFFFA0);
+        context.drawTextWithShadow(textRenderer, Text.literal(
+                "Frames " + clip.frames() + " | Nodes " + clip.animatedNodeCount() + " | ModelParts " + clip.modelParts()),
+                x, y + 11, 0xCCCCCC);
+        context.drawTextWithShadow(textRenderer, Text.literal(
+                "Current " + String.format(Locale.ROOT, "%.2f", animationFrame)
+                        + " | Speed " + String.format(Locale.ROOT, "%.2f", ChaoAnimationLabSettings.speed(clip))
+                        + " | " + (animationPlaying ? "PLAY" : "PAUSE")),
+                x, y + 22, 0xCCCCCC);
+
+        StringBuilder known = new StringBuilder("Known animated: ");
+        int shown = 0;
+        for (Integer node : clip.nodes().keySet()) {
+            if (!ChaoRigContract.isKnown(node)) continue;
+            if (shown++ > 0) known.append(", ");
+            known.append(ChaoRigContract.label(node));
+            if (shown >= 3) {
+                known.append("...");
+                break;
+            }
+        }
+        context.drawTextWithShadow(textRenderer, Text.literal(known.toString()), x, y + 33, 0xA8D8FF);
+        context.drawTextWithShadow(textRenderer, Text.literal("GPU LIVE: Mtotal SA2 skin | dedicated UV3/UV4 | VBO stable"), x, y + 47, 0xFFB0B0);
     }
 
     private void addTabButton(LabTab tab, int x, int y, int width) {
@@ -284,6 +394,10 @@ public final class ChaoVisualLabScreen extends Screen {
         if (!status.isEmpty() && System.currentTimeMillis() < statusUntil) {
             context.drawCenteredTextWithShadow(textRenderer, Text.literal(status), center,
                     Math.max(4, height - 13), 0xFFFFA0);
+        }
+
+        if (activeTab == LabTab.ANIM) {
+            renderAnimationDiagnostics(context, layout);
         }
     }
 
@@ -324,8 +438,10 @@ public final class ChaoVisualLabScreen extends Screen {
             context.getMatrices().push();
             context.getMatrices().translate(centerX, baseY, 100.0F);
             context.getMatrices().scale(entityScale, -entityScale, entityScale);
+            ChaoAnimationClip previewAnimation = activeTab == LabTab.ANIM ? selectedAnimation() : null;
+            double previewAnimationFrame = previewAnimation == null ? 0.0D : animationFrame;
             chaoRenderer.renderGuiPreview(previewEntity, context.getMatrices(), PREVIEW_FULL_BRIGHT,
-                    previewYaw, -8.0F);
+                    previewYaw, -8.0F, previewAnimation, previewAnimationFrame);
             context.getMatrices().pop();
         } else {
             context.drawCenteredTextWithShadow(textRenderer, Text.literal("Preview renderer unavailable"),
@@ -345,8 +461,7 @@ public final class ChaoVisualLabScreen extends Screen {
         double cachedMiB = metrics.cachedEstimatedBytes() / (1024.0D * 1024.0D);
         String perf = "VBO " + metrics.buildsPerSecond() + "/s q" + metrics.deferredPerSecond()
                 + "  cache " + metrics.cachedEntities() + "e/" + metrics.sharedEntries() + "shared "
-                + String.format(Locale.ROOT, "%.1fMB", cachedMiB)
-                + (ChaoPerformanceProfiler.isRunning() ? "  LOG" : "");
+                + String.format(Locale.ROOT, "%.1fMB", cachedMiB);
         int perfColor = metrics.buildsPerSecond() == 0 ? 0xA0FFA0
                 : metrics.buildsPerSecond() <= 20 ? 0xFFFFA0 : 0xFF7777;
         context.drawCenteredTextWithShadow(textRenderer, Text.literal(perf), centerX,
@@ -416,6 +531,21 @@ public final class ChaoVisualLabScreen extends Screen {
         }
         if (previewDirty && --previewSettleTicks <= 0) {
             syncPreview();
+        }
+
+        ChaoAnimationClip clip = selectedAnimation();
+        if (activeTab == LabTab.ANIM && animationPlaying && clip != null && clip.frames() > 0) {
+            // Raw SA2 motion preview clock. 30 source frames/second is used only
+            // Base SA2 preview cadence is 1.5 source frames per Minecraft tick.
+            // The F8 per-clip multiplier is persisted immediately so tuning done
+            // while comparing against SA Tools survives restarts.
+            animationFrame += 1.5D * ChaoAnimationLabSettings.speed(clip);
+            if (animationFrame >= clip.frames()) {
+                animationFrame %= clip.frames();
+            }
+            if (animationFrameSlider != null) {
+                animationFrameSlider.setMappedValueSilently(animationFrame);
+            }
         }
     }
 
@@ -570,6 +700,12 @@ public final class ChaoVisualLabScreen extends Screen {
         int index = available.indexOf(current);
         ChaoAnimalType next = available.get(Math.floorMod(index + 1, available.size()));
         update(state -> state.withAnimalPart(slot, next), true);
+    }
+
+    private void cycleHeadDeco() {
+        ChaoHeadDecoType[] values = ChaoHeadDecoType.values();
+        update(state -> state.withHeadDeco(
+                values[(state.headDeco().ordinal() + 1) % values.length]), true);
     }
 
     private void changePreset(int direction) {
@@ -799,12 +935,12 @@ public final class ChaoVisualLabScreen extends Screen {
 
     private static String serialize(ChaoAppearanceState state) {
         return String.join("|",
-                "CCVL3", state.type().name(), Float.toString(state.age()), Float.toString(state.alignment()),
+                "CCVL4", state.type().name(), Float.toString(state.age()), Float.toString(state.alignment()),
                 Float.toString(state.swim()), Float.toString(state.fly()), Float.toString(state.run()), Float.toString(state.power()),
                 state.colorType().name(), Boolean.toString(state.monotone()), state.reflectionType().name(),
                 state.animalParts().arms().name(), state.animalParts().legs().name(), state.animalParts().tail().name(),
                 state.animalParts().wings().name(), state.animalParts().face().name(), state.animalParts().horns().name(),
-                state.animalParts().ears().name(), state.animalParts().forehead().name(),
+                state.animalParts().ears().name(), state.animalParts().forehead().name(), state.headDeco().name(),
                 Boolean.toString(state.customEyes()), Integer.toString(state.eyes()), Integer.toString(state.eyelid()),
                 Integer.toString(state.mouth()), Boolean.toString(state.customMouth()), Integer.toString(state.mouthMid()),
                 Integer.toString(state.mouthSide()), Boolean.toString(state.customEmotionBall()),
@@ -816,6 +952,20 @@ public final class ChaoVisualLabScreen extends Screen {
         if (encoded == null) return null;
         String[] parts = encoded.trim().split("\\|", -1);
         try {
+            if (parts.length == 32 && "CCVL4".equals(parts[0])) {
+                return new ChaoAppearanceState(
+                        ChaoVisualType.valueOf(parts[1]), Float.parseFloat(parts[2]), Float.parseFloat(parts[3]),
+                        Float.parseFloat(parts[4]), Float.parseFloat(parts[5]), Float.parseFloat(parts[6]), Float.parseFloat(parts[7]),
+                        ChaoColorType.valueOf(parts[8]), Boolean.parseBoolean(parts[9]), ChaoReflectionType.valueOf(parts[10]),
+                        new ChaoAnimalParts(ChaoAnimalType.valueOf(parts[11]), ChaoAnimalType.valueOf(parts[12]),
+                                ChaoAnimalType.valueOf(parts[13]), ChaoAnimalType.valueOf(parts[14]), ChaoAnimalType.valueOf(parts[15]),
+                                ChaoAnimalType.valueOf(parts[16]), ChaoAnimalType.valueOf(parts[17]), ChaoAnimalType.valueOf(parts[18])),
+                        ChaoHeadDecoType.valueOf(parts[19]),
+                        Boolean.parseBoolean(parts[20]), Integer.parseInt(parts[21]), Integer.parseInt(parts[22]),
+                        Integer.parseInt(parts[23]), Boolean.parseBoolean(parts[24]), Integer.parseInt(parts[25]), Integer.parseInt(parts[26]),
+                        Boolean.parseBoolean(parts[27]), Boolean.parseBoolean(parts[28]), Boolean.parseBoolean(parts[29]),
+                        Boolean.parseBoolean(parts[30]), Boolean.parseBoolean(parts[31]));
+            }
             if (parts.length == 31 && "CCVL3".equals(parts[0])) {
                 return new ChaoAppearanceState(
                         ChaoVisualType.valueOf(parts[1]), Float.parseFloat(parts[2]), Float.parseFloat(parts[3]),
@@ -954,6 +1104,7 @@ public final class ChaoVisualLabScreen extends Screen {
         BODY("Body"),
         FACE("Face"),
         PARTS("Parts"),
+        ANIM("Anim"),
         TEST("Test");
 
         final String label;

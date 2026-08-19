@@ -8,6 +8,7 @@ import com.chaocraft.visual.ChaoColorType;
 import com.chaocraft.visual.ChaoReflectionType;
 import com.chaocraft.visual.ChaoAnimalType;
 import com.chaocraft.visual.ChaoAnimalParts;
+import com.chaocraft.visual.ChaoHeadDecoType;
 import com.chaocraft.visual.ChaoVisualType;
 import net.fabricmc.fabric.api.networking.v1.ServerPlayNetworking;
 import net.fabricmc.fabric.api.event.lifecycle.v1.ServerTickEvents;
@@ -116,6 +117,7 @@ public final class ChaoVisualLabNetworking {
         buf.writeVarInt(state.animalParts().horns().ordinal());
         buf.writeVarInt(state.animalParts().ears().ordinal());
         buf.writeVarInt(state.animalParts().forehead().ordinal());
+        buf.writeVarInt(state.headDeco().ordinal());
         buf.writeBoolean(state.customEyes());
         buf.writeVarInt(state.eyes());
         buf.writeVarInt(state.eyelid());
@@ -152,6 +154,7 @@ public final class ChaoVisualLabNetworking {
                         ChaoAnimalType.fromOrdinal(buf.readVarInt()),
                         ChaoAnimalType.fromOrdinal(buf.readVarInt())
                 ),
+                ChaoHeadDecoType.fromOrdinal(buf.readVarInt()),
                 buf.readBoolean(),
                 buf.readVarInt(),
                 buf.readVarInt(),
@@ -336,7 +339,12 @@ public final class ChaoVisualLabNetworking {
             if (animal == ChaoAnimalType.NONE) continue;
             int col = n % 7, row = n / 7; n++;
             ChaoAnimalParts all = new ChaoAnimalParts(animal, animal, animal, animal, animal, animal, animal, animal);
-            ChaoAppearanceState state = baseState.withAnimalParts(all);
+            // Animal Matrix isolates Animal Parts. Carrying the preview's HeadDeco
+            // duplicated an unrelated attachment across every matrix entity and
+            // obscured both visual QA and GPU-cache stress results.
+            ChaoAppearanceState state = baseState
+                    .withHeadDeco(ChaoHeadDecoType.NONE)
+                    .withAnimalParts(all);
             Vec3d position = base.add(right.multiply((col - 3.0D) * 2.15D)).add(forward.multiply(row * 2.5D));
             spawnMatrixChao(world, player, position, state, "ANI-" + animal.name());
         }

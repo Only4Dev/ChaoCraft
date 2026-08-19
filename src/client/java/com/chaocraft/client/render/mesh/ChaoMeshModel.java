@@ -24,11 +24,27 @@ public record ChaoMeshModel(List<String> morphNames, List<Segment> segments) {
 			float[] uvs,
 			float[][] morphPositionDeltas,
 			float[][] morphNormalDeltas,
+			int[] skinPacked,
 			int[] indices,
 			List<Submesh> submeshes
 	) {
 		public Segment {
 			submeshes = List.copyOf(submeshes);
+			if (skinPacked != null && skinPacked.length != vertexCount * 2) {
+				throw new IllegalArgumentException("skinPacked must contain two packed influences per vertex");
+			}
+		}
+
+		public boolean hasSkin() {
+			return skinPacked != null;
+		}
+
+		public int skinInfluence0(int vertexIndex) {
+			return skinPacked == null ? 0 : skinPacked[vertexIndex * 2];
+		}
+
+		public int skinInfluence1(int vertexIndex) {
+			return skinPacked == null ? 0 : skinPacked[vertexIndex * 2 + 1];
 		}
 	}
 }
