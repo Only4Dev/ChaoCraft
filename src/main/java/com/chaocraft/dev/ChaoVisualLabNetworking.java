@@ -299,6 +299,7 @@ public final class ChaoVisualLabNetworking {
                 // and Chaos instead of hard-coding Neutral Normal. Face/emotion
                 // settings are preserved as well because this is a visual audit tool.
                 ChaoAppearanceState state = baseState
+                        .withHeadDeco(ChaoHeadDecoType.NONE)
                         .withColorType(color)
                         .withMonotone(tone == 1);
                 Vec3d position = base
@@ -320,7 +321,9 @@ public final class ChaoVisualLabNetworking {
         ChaoReflectionType[] values = ChaoReflectionType.values();
         for (int i = 0; i < values.length; i++) {
             int col = i % 6, row = i / 6;
-            ChaoAppearanceState state = baseState.withReflectionType(values[i]);
+            ChaoAppearanceState state = baseState
+                    .withHeadDeco(ChaoHeadDecoType.NONE)
+                    .withReflectionType(values[i]);
             Vec3d position = base.add(right.multiply((col - 2.5D) * 2.15D)).add(forward.multiply(row * 2.5D));
             spawnMatrixChao(world, player, position, state, "REF-" + values[i].name());
         }
